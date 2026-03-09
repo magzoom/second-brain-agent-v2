@@ -32,9 +32,10 @@ sba/
     keyboards.py    — inline keyboards
   integrations/
     apple_notes.py
-    apple_calendar.py
+    apple_calendar.py   ← не используется агентом, оставлен для совместимости
     google_drive.py
     google_tasks.py
+    google_calendar.py
     checker.py
 ```
 

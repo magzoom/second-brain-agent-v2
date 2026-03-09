@@ -18,6 +18,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/drive.metadata.readonly",
     "https://www.googleapis.com/auth/tasks",
+    "https://www.googleapis.com/auth/calendar",
 ]
 
 CATEGORY_LISTS = [

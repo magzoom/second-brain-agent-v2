@@ -12,12 +12,12 @@ Built on **[Claude Agent SDK](https://github.com/anthropics/claude-code)** (Anth
 ```
 You (Telegram)  ──▶  Main Agent (Claude)
                           │
-              ┌───────────┼───────────────┐
-              ▼           ▼               ▼
-        Google Tasks  Apple Notes    Google Drive
-        (create task) (save note)   (upload file)
-              │           │               │
-              └───────────┴───────────────┘
+          ┌───────────────┼───────────────┬───────────────┐
+          ▼               ▼               ▼               ▼
+    Google Tasks    Apple Notes     Google Drive   Google Calendar
+    (create task)   (save note)    (upload file)  (create event)
+          │               │               │               │
+          └───────────────┴───────────────┴───────────────┘
                           │
                     Research Agent ──▶ Web Search
                           │
@@ -51,12 +51,26 @@ You (Telegram)  ──▶  Main Agent (Claude)
 | Task manager | Google Tasks API |
 | File storage | Google Drive API (OAuth2) |
 | Notes | Apple Notes via JXA (JavaScript for Automation) |
-| Calendar | Apple Calendar via AppleScript |
+| Calendar | Google Calendar API (OAuth2) |
 | Messaging | Telegram Bot API (aiogram 3.x) |
 | Telegram reader | Telethon (userbot for channel reading) |
 | Database | SQLite with FTS5 full-text search |
 | Scheduler | macOS launchd (4 background daemons) |
 | Language | Python 3.12 |
+
+---
+
+## Native macOS alternative
+
+By default the agent uses Google services (Tasks, Calendar, Drive). If you prefer a fully offline, native macOS stack, both Apple integration files are already included — you just need to swap the tool handlers in `agent.py`:
+
+| Google service | Apple alternative | Existing file |
+|---|---|---|
+| Google Tasks | Apple Reminders | `sba/integrations/apple_reminders.py` |
+| Google Calendar | Apple Calendar | `sba/integrations/apple_calendar.py` |
+| Google Drive | — | No native equivalent with a programmable API |
+
+Apple Notes is used regardless of which stack you choose.
 
 ---
 

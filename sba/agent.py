@@ -19,7 +19,7 @@ from claude_agent_sdk.types import AssistantMessage, TextBlock
 
 from sba.db import Database
 from sba.notifier import Notifier
-from sba.integrations import apple_notes, apple_calendar, google_tasks
+from sba.integrations import apple_notes, google_tasks, google_calendar
 from sba import research_agent as _research_module
 
 logger = logging.getLogger(__name__)
@@ -193,13 +193,14 @@ async def _move_note_tool(args: dict[str, Any]) -> dict[str, Any]:
     return _ok(f"Заметка перемещена в '{category}'" if ok else "Не удалось переместить заметку")
 
 
-@tool("create_calendar_event", "Создать событие в Apple Calendar.", {
+@tool("create_calendar_event", "Создать событие в Google Calendar.", {
     "type": "object",
     "properties": {
         "title": {"type": "string"},
         "date": {"type": "string", "description": "YYYY-MM-DD"},
         "time": {"type": "string", "description": "HH:MM"},
         "duration_minutes": {"type": "integer", "default": 60},
+        "notes": {"type": "string", "description": "Описание события (опционально)"},
     },
     "required": ["title", "date"],
 })
@@ -208,8 +209,9 @@ async def _create_calendar_event_tool(args: dict[str, Any]) -> dict[str, Any]:
     date_str = args.get("date", "")
     time_str = args.get("time", "09:00")
     duration = int(args.get("duration_minutes", 60))
+    notes = args.get("notes") or None
     ok = await asyncio.to_thread(
-        apple_calendar.create_event, title, date_str, time_str, duration
+        google_calendar.create_event, _config, title, date_str, time_str, duration, notes
     )
     return _ok(f"Событие создано: '{title}' {date_str} {time_str}" if ok else "Не удалось создать событие")
 
@@ -330,7 +332,7 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 4_Family_Relationships, 5_Personal Growth, 6_Brightness life, 7_Spirituality
 
 При входящем элементе (указан Источник и ID):
-- action/review → create_reminder в Google Tasks (+ create_calendar_event если есть дата), затем index_content
+- action/review → create_reminder в Google Tasks (+ create_calendar_event в Google Calendar если есть дата), затем index_content
 - info → move_drive_file или move_note_to_category, затем index_content
 - мусор → request_deletion
 - ЗАПРЕЩЕНО вызывать Research Agent для обработки входящих элементов — только для явных запросов пользователя типа "найди" или "изучи".
