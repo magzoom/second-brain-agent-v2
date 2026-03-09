@@ -32,7 +32,7 @@ async def run(config: dict) -> None:
 
     notifier = Notifier(config)
     db_path = get_db_path(config)
-    lock_fd = acquire_lock()  # exits silently if already running
+    lock_fd = acquire_lock(LOCK_FILE)  # exits silently if already running
 
     stats = {"processed": 0, "actions": 0, "info": 0, "errors": 0}
 

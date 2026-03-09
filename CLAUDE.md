@@ -11,7 +11,7 @@
 - `com.sba.bot` — Telegram long polling, KeepAlive
 - `com.sba.inbox` — каждые 2 ч, Google Drive changes + Apple Notes Inbox
 - `com.sba.legacy` — 09:00, обработка накопленного + Goal Tracker
-- `com.sba.digest` — 08:00, утренний дайджест
+- `com.sba.digest` — 09:09, утренний дайджест
 
 ## Ключевые файлы
 

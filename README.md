@@ -25,7 +25,7 @@ You (Telegram)  ──▶  Main Agent (Claude)
                     (knowledge base)
 ```
 
-**Every morning at 08:00** → Digest Agent sends a briefing:
+**Every morning at 09:09** → Digest Agent sends a briefing:
 - Tasks due today from Google Tasks
 - Top posts from your Telegram channels (via Telethon)
 - Categorized news: geopolitics, AI, local news, humor, health
@@ -292,7 +292,7 @@ sba/
 - Searches your personal knowledge base (FTS5)
 - Returns a synthesized answer
 
-**Digest Agent** (standalone, runs at 08:00):
+**Digest Agent** (standalone, runs at 09:09):
 - Gets tasks due today from Google Tasks
 - Reads last 24h posts from all your Telegram channels
 - Selects top items by category

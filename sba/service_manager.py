@@ -5,7 +5,7 @@ Daemons:
   bot     — Telegram bot, KeepAlive + ThrottleInterval=30, runs forever
   inbox   — Every 2 h (StartInterval 7200)
   legacy  — Daily at 09:00 (StartCalendarInterval)
-  digest  — Daily at 08:00 (StartCalendarInterval)
+  digest  — Daily at 09:09 (StartCalendarInterval)
 
 Labels match v1 (com.sba.*) so installing v2 replaces v1 plists.
 Bot label is com.sba.bot (v1 used com.sba.telegram-bot — handled explicitly).
@@ -176,9 +176,9 @@ def _digest_plist() -> str:
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
-    <integer>8</integer>
+    <integer>9</integer>
     <key>Minute</key>
-    <integer>0</integer>
+    <integer>9</integer>
   </dict>
   <key>RunAtLoad</key>
   <false/>
