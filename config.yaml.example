@@ -55,14 +55,15 @@ goal_tracker:
   channel_id: -1001234567890         # ID Telegram канала для Goal Tracker Diary
 
 index_rules:
-  # Папки, которые полностью пропускаются при индексации.
-  # Используй fnmatch-паттерны по имени папки (регистр не важен).
-  # Примеры: "Archive*", "Code", "Old_*", "*.bak"
-  skip_folders: []
-  # Папки, где индексируется только главный файл (README, _index и т.п.).
-  # Остальные файлы внутри не читаются.
-  # Примеры: "ВРЦ", "QazIndustry*", "My Project"
-  summary_only_folders: []
+  # Паттерны по имени папки (fnmatch, регистр не важен).
+  # "*" — любые символы. Точное имя — без звёздочки.
+  skip_folders:
+    # - "Archive*"    # любая папка начинающаяся с Archive
+    # - "Code"        # точное имя
+    # - "Old_*"
+  summary_only_folders:
+    # - "ВРЦ"
+    # - "QazIndustry*"
 
 paths:
   db: ~/.sba/sba.db
