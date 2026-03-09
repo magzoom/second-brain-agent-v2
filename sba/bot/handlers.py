@@ -224,13 +224,17 @@ async def callback_folder_deep(callback: CallbackQuery) -> None:
     reg_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         row = await db.get_file_by_id(reg_id)
-        if row:
-            await db.set_folder_status_by_id(reg_id, "pending_deep")
-            await callback.message.edit_text(
-                f"📂 <b>{row['title']}</b>\n✅ Добавлено в очередь — обработаю при следующем запуске"
-            )
-        else:
+        if not row:
             await callback.message.edit_text("⚠️ Запись не найдена")
+            await callback.answer()
+            return
+        if row.get("status") not in ("pending_decision", "pending_deep"):
+            await callback.answer("Уже обработано", show_alert=False)
+            return
+        await db.set_folder_status_by_id(reg_id, "pending_deep")
+        await callback.message.edit_text(
+            f"📂 <b>{row['title']}</b>\n✅ Добавлено в очередь — обработаю при следующем запуске"
+        )
     await callback.answer()
 
 
@@ -239,6 +243,17 @@ async def callback_folder_summary(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
     reg_id = int(callback.data.split(":")[1])
+
+    async with Database(get_db_path(_config)) as db:
+        row = await db.get_file_by_id(reg_id)
+    if not row:
+        await callback.message.edit_text("⚠️ Запись не найдена")
+        await callback.answer()
+        return
+    if row.get("status") == "folder_summary":
+        await callback.answer("Саммари уже создан", show_alert=False)
+        return
+
     await callback.message.edit_text("⏳ Создаю саммари...")
     await callback.answer()
 
