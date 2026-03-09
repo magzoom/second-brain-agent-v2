@@ -47,6 +47,12 @@ def _create_tables(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # already exists
+    # Column migration: type for hierarchical indexing (file/folder_summary/folder_skipped)
+    try:
+        conn.execute("ALTER TABLE files_registry ADD COLUMN type TEXT DEFAULT 'file'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # already exists
     try:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_tracker_task_id "
@@ -176,13 +182,13 @@ class Database:
     # ── files_registry ────────────────────────────────────────────────────────
 
     async def upsert_file(
-        self, source: str, source_id: str, content_hash: str,
-        title: str = "", path: str = "",
+        self, source: str, source_id: str, content_hash: str = "",
+        title: str = "", path: str = "", entry_type: str = "file",
     ) -> tuple[int, bool]:
         # Atomic INSERT OR IGNORE — eliminates SELECT→INSERT race condition
         async with self._conn.execute(
-            "INSERT OR IGNORE INTO files_registry (source, source_id, content_hash, title, path) VALUES (?,?,?,?,?)",
-            (source, source_id, content_hash, title, path),
+            "INSERT OR IGNORE INTO files_registry (source, source_id, content_hash, title, path, type) VALUES (?,?,?,?,?,?)",
+            (source, source_id, content_hash, title, path, entry_type),
         ) as cur:
             was_inserted = cur.rowcount == 1
             if was_inserted:
@@ -213,6 +219,15 @@ class Database:
             (source, source_id),
         ) as cur:
             return await cur.fetchone() is not None
+
+    async def get_entry_type(self, source: str, source_id: str) -> Optional[str]:
+        """Return the 'type' field for a registered entry, or None if not registered."""
+        async with self._conn.execute(
+            "SELECT type FROM files_registry WHERE source=? AND source_id=?",
+            (source, source_id),
+        ) as cur:
+            row = await cur.fetchone()
+            return row["type"] if row else None
 
     async def update_file_status(
         self, file_id: int, status: str,

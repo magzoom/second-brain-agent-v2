@@ -211,7 +211,13 @@ async def _goal_tracker(db: Database, notifier: Notifier, config: dict) -> None:
 async def _process_gdrive_legacy(
     db: Database, notifier: Notifier, config: dict, stats: dict, limit: int
 ) -> None:
-    """Process unclassified files in Google Drive category folders."""
+    """Process unclassified files in Google Drive category folders.
+
+    Uses hierarchical strategy from config index_rules:
+    - skip_folders: register as folder_skipped, do not descend
+    - summary_only_folders: index only README/main file, register as folder_summary
+    - everything else: full file-by-file processing (up to limit)
+    """
     try:
         from sba.integrations.google_drive import (
             build_service, list_folder_contents, get_file_content, metadata_hash,
@@ -226,11 +232,15 @@ async def _process_gdrive_legacy(
         stats["errors"] += 1
         return
 
+    index_rules = config.get("index_rules", {})
+    skip_set = set(index_rules.get("skip_folders", []))
+    summary_set = set(index_rules.get("summary_only_folders", []))
+
     categories = config.get("categories", [])
-    processed = 0
+    counter = {"n": 0}  # mutable counter shared across recursive _walk_folder calls
 
     for folder_name in categories:
-        if processed >= limit:
+        if counter["n"] >= limit:
             break
 
         config_key = f"folder_{folder_name.replace(' ', '_').lower()}"
@@ -240,44 +250,139 @@ async def _process_gdrive_legacy(
             continue
 
         try:
-            for file_info in await asyncio.to_thread(list_folder_contents, service, folder_id, True):
-                if processed >= limit:
-                    break
-
-                mime = file_info.get("mimeType", "")
-                if mime == "application/vnd.google-apps.folder":
-                    continue
-
-                file_id = file_info.get("id", "")
-                title = file_info.get("name", "Untitled")
-                c_hash = metadata_hash(file_info)
-
-                reg_id, is_new = await db.upsert_file(
-                    source="gdrive", source_id=file_id,
-                    content_hash=c_hash, title=title,
-                    path=file_info.get("webViewLink", ""),
-                )
-                if not is_new:
-                    continue
-
-                content_text = ""
-                try:
-                    content_bytes = await asyncio.to_thread(get_file_content, service, file_id, mime)
-                    if content_bytes:
-                        content_text = content_bytes.decode("utf-8", errors="ignore")
-                except Exception:
-                    pass
-
-                await _run_agent_on_legacy_item(
-                    db=db, notifier=notifier, config=config,
-                    source="gdrive", source_id=file_id,
-                    title=title, content=content_text, stats=stats,
-                )
-                processed += 1
-
+            await _walk_folder(
+                service=service, db=db, notifier=notifier, config=config,
+                folder_id=folder_id, skip_set=skip_set, summary_set=summary_set,
+                stats=stats, limit=limit, counter=counter,
+                _list=list_folder_contents, _get=get_file_content, _hash=metadata_hash,
+            )
         except Exception as e:
             logger.error(f"Error processing Drive folder '{folder_name}': {e}")
             stats["errors"] += 1
+
+
+async def _walk_folder(
+    service, db: Database, notifier: Notifier, config: dict,
+    folder_id: str, skip_set: set, summary_set: set,
+    stats: dict, limit: int, counter: dict,
+    _list, _get, _hash,
+) -> None:
+    """Non-recursive controlled traversal of a Drive folder.
+
+    For each item:
+    - subfolder in skip_set → register as folder_skipped (once), stop descent
+    - subfolder in summary_set → find README, index it, register as folder_summary (once)
+    - subfolder else → recurse
+    - file → process normally (existing logic)
+    """
+    FOLDER_MIME = "application/vnd.google-apps.folder"
+
+    items = await asyncio.to_thread(_list, service, folder_id, False)
+
+    for item in items:
+        if counter["n"] >= limit:
+            return
+
+        mime = item.get("mimeType", "")
+        item_id = item.get("id", "")
+        title = item.get("name", "Untitled")
+
+        if mime == FOLDER_MIME:
+            if item_id in skip_set:
+                existing = await db.get_entry_type("gdrive", item_id)
+                if existing != "folder_skipped":
+                    await db.upsert_file(
+                        source="gdrive", source_id=item_id,
+                        title=title, path=item.get("webViewLink", ""),
+                        entry_type="folder_skipped",
+                    )
+                    logger.info(f"Folder skipped (rule): {title}")
+                # do not descend
+            elif item_id in summary_set:
+                existing = await db.get_entry_type("gdrive", item_id)
+                if existing == "folder_summary":
+                    continue  # already indexed
+                readme = await _find_readme(service, item_id, _list)
+                if readme:
+                    await _process_gdrive_file(
+                        file_info=readme, service=service, db=db, notifier=notifier,
+                        config=config, stats=stats, counter=counter, limit=limit,
+                        _get=_get, _hash=_hash,
+                    )
+                await db.upsert_file(
+                    source="gdrive", source_id=item_id,
+                    title=title, path=item.get("webViewLink", ""),
+                    entry_type="folder_summary",
+                )
+                logger.info(f"Folder summary indexed: {title}")
+                # do not descend further
+            else:
+                # Recurse into subfolder
+                await _walk_folder(
+                    service=service, db=db, notifier=notifier, config=config,
+                    folder_id=item_id, skip_set=skip_set, summary_set=summary_set,
+                    stats=stats, limit=limit, counter=counter,
+                    _list=_list, _get=_get, _hash=_hash,
+                )
+        else:
+            await _process_gdrive_file(
+                file_info=item, service=service, db=db, notifier=notifier,
+                config=config, stats=stats, counter=counter, limit=limit,
+                _get=_get, _hash=_hash,
+            )
+
+
+async def _find_readme(service, folder_id: str, _list) -> dict | None:
+    """Find a README or main summary file in a folder. Returns file_info dict or None."""
+    README_PATTERNS = ("readme", "_index", "_о папке", "summary", "overview", "main", "about")
+    try:
+        items = await asyncio.to_thread(_list, service, folder_id, False)
+        for item in items:
+            if item.get("mimeType", "") == "application/vnd.google-apps.folder":
+                continue
+            name_lower = item.get("name", "").lower()
+            if any(name_lower.startswith(p) for p in README_PATTERNS):
+                return item
+    except Exception as e:
+        logger.warning(f"_find_readme failed for folder {folder_id}: {e}")
+    return None
+
+
+async def _process_gdrive_file(
+    file_info: dict, service, db: Database, notifier: Notifier, config: dict,
+    stats: dict, counter: dict, limit: int, _get, _hash,
+) -> None:
+    """Process a single Drive file: upsert registry, read content, run agent."""
+    if counter["n"] >= limit:
+        return
+
+    file_id = file_info.get("id", "")
+    mime = file_info.get("mimeType", "")
+    title = file_info.get("name", "Untitled")
+    c_hash = _hash(file_info)
+
+    _, is_new = await db.upsert_file(
+        source="gdrive", source_id=file_id,
+        content_hash=c_hash, title=title,
+        path=file_info.get("webViewLink", ""),
+    )
+    if not is_new:
+        return
+
+    content_text = ""
+    try:
+        content_bytes = await asyncio.to_thread(_get, service, file_id, mime)
+        if content_bytes:
+            content_text = content_bytes.decode("utf-8", errors="ignore")
+    except Exception:
+        pass
+
+    await _run_agent_on_legacy_item(
+        db=db, notifier=notifier, config=config,
+        source="gdrive", source_id=file_id,
+        title=title, content=content_text, stats=stats,
+    )
+    counter["n"] += 1
 
 
 async def _process_apple_notes_legacy(

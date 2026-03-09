@@ -54,6 +54,14 @@ anthropic:
 goal_tracker:
   channel_id: -1001234567890         # ID Telegram канала для Goal Tracker Diary
 
+index_rules:
+  # Папки, которые полностью пропускаются при индексации (архивы, код и т.п.)
+  # Записываются в БД как folder_skipped — при следующих запусках не трогаются
+  skip_folders: []
+  # Папки, где индексируется только главный файл (README, _index и т.п.)
+  # Записываются в БД как folder_summary — файлы внутри не читаются
+  summary_only_folders: []
+
 paths:
   db: ~/.sba/sba.db
   logs: ~/.sba/logs/
