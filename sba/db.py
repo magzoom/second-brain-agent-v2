@@ -205,8 +205,8 @@ class Database:
 
         if row["content_hash"] != content_hash:
             await self._conn.execute(
-                "UPDATE files_registry SET content_hash=?, title=?, path=?, status='new', processed_at=NULL WHERE id=?",
-                (content_hash, title, path, row["id"]),
+                "UPDATE files_registry SET content_hash=?, title=?, path=?, type=?, status='new', processed_at=NULL WHERE id=?",
+                (content_hash, title, path, entry_type, row["id"]),
             )
             await self._conn.commit()
             return row["id"], True
