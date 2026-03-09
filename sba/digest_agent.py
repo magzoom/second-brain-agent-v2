@@ -21,12 +21,14 @@ logger = logging.getLogger(__name__)
 # Module-level state (injected at startup)
 _notifier = None
 _config: dict = {}
+_digest_sent = False  # set to True when send_digest is called successfully
 
 
 def setup(notifier, config: dict) -> None:
-    global _notifier, _config
+    global _notifier, _config, _digest_sent
     _notifier = notifier
     _config = config
+    _digest_sent = False
 
 
 def _ok(text: str) -> dict:
@@ -56,7 +58,7 @@ async def _get_telegram_channel_posts_tool(args: dict[str, Any]) -> dict[str, An
 
         posts = []
         since = datetime.now() - timedelta(hours=hours_back)
-        MAX_POSTS = 300  # ~75K tokens at 500 chars/post
+        MAX_POSTS = 60  # ~9K tokens at 150 chars/post — enough for digest
 
         client = TelegramClient(session_path, api_id, api_hash)
         try:
@@ -77,7 +79,7 @@ async def _get_telegram_channel_posts_tool(args: dict[str, Any]) -> dict[str, An
                             username = getattr(channel.entity, "username", None)
                             posts.append({
                                 "channel": channel.name,
-                                "text": msg.text[:500],
+                                "text": msg.text[:150],
                                 "date": msg.date.isoformat(),
                                 "url": f"https://t.me/{username}/{msg.id}" if username else None,
                             })
@@ -92,7 +94,7 @@ async def _get_telegram_channel_posts_tool(args: dict[str, Any]) -> dict[str, An
         lines = []
         for p in posts[:MAX_POSTS]:
             url_part = f" ({p['url']})" if p.get("url") else ""
-            lines.append(f"[{p['channel']}]{url_part}: {p['text'][:300]}")
+            lines.append(f"[{p['channel']}]{url_part}: {p['text'][:150]}")
         return _ok(f"Посты из {len(set(p['channel'] for p in posts))} каналов ({len(posts)} постов):\n\n" + "\n\n---\n\n".join(lines))
 
     except Exception as e:
@@ -112,11 +114,17 @@ async def _get_todays_reminders_and_events_tool(args: dict[str, Any]) -> dict[st
         tasks = []
         logger.warning(f"Google Tasks unavailable: {e}")
 
+    from datetime import date as _date
+    today = _date.today().isoformat()
+
     lines = []
     if tasks:
         lines.append("📋 Задачи:")
         for t in tasks:
-            lines.append(f"  • {t['title']} [{t['list']}]")
+            due = t.get("due_date", "")
+            overdue = " ⚠️ просрочена" if due and due < today else ""
+            due_label = f" (срок: {due})" if due else ""
+            lines.append(f"  • {t['title']} [{t['list']}]{due_label}{overdue}")
     else:
         lines.append("📋 Задач на сегодня нет")
 
@@ -129,7 +137,10 @@ async def _get_todays_reminders_and_events_tool(args: dict[str, Any]) -> dict[st
     "required": ["text"],
 })
 async def _send_digest_tool(args: dict[str, Any]) -> dict[str, Any]:
+    global _digest_sent
+    logger.info(f"send_digest called, _notifier={_notifier is not None}")
     if not _notifier:
+        logger.error("send_digest: _notifier is None — message will NOT be sent")
         return _ok("Notifier not initialized")
     text = args.get("text", "")
     MAX_TG = 4096
@@ -150,6 +161,7 @@ async def _send_digest_tool(args: dict[str, Any]) -> dict[str, Any]:
         for part in parts:
             await _notifier.send_message(part)
 
+    _digest_sent = True
     return _ok("Брифинг отправлен")
 
 
@@ -181,11 +193,17 @@ DIGEST_SYSTEM_PROMPT = """Ты создаёшь утренний дайджес�
 5. Сформируй одно красивое сообщение с эмодзи и ссылками на источники
 6. Вызови send_digest с готовым текстом
 
-Формат начала:
-🌅 Доброе утро! [дата]
+ВАЖНО по форматированию: используй HTML-теги Telegram, НЕ markdown.
+Жирный текст: <b>текст</b> — НЕ **текст**
+Ссылки: <a href="url">текст</a>
+Никаких звёздочек, подчёркиваний, решёток.
 
-📋 СЕГОДНЯ:
-[задачи и события]
+Формат начала:
+🌅 <b>Доброе утро!</b>
+<b>[число месяц год, например: 9 марта 2026]</b>
+
+📋 <b>СЕГОДНЯ:</b>
+[задачи — показывай срок и ⚠️ если просрочена]
 
 📰 ДАЙДЖЕСТ:
 ..."""
@@ -207,7 +225,7 @@ async def run_digest(notifier, config: dict) -> None:
             "mcp__digest__send_digest",
         ],
         disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
-        max_turns=10,
+        max_turns=15,
         env={
             "ANTHROPIC_API_KEY": api_key,
             "HOME": str(Path.home()),
@@ -215,10 +233,18 @@ async def run_digest(notifier, config: dict) -> None:
         },
     )
 
+    last_result = None
     try:
         async for msg in query(prompt="Подготовь и отправь утренний дайджест.", options=options):
             if hasattr(msg, "result"):
-                logger.info(f"Digest completed: {str(msg.result)[:100]}")
+                last_result = str(msg.result)
+                logger.info(f"Digest completed: {last_result[:100]}")
     except Exception as e:
         logger.error(f"Digest agent failed: {e}", exc_info=True)
         await notifier.send_error(f"Digest агент упал: {e}", module="Digest")
+        return
+
+    if not _digest_sent:
+        logger.warning("Digest agent did not call send_digest — sending result directly")
+        if last_result and len(last_result) > 50:
+            await notifier.send_message(last_result[:4000])

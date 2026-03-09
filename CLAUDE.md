@@ -107,6 +107,7 @@ cd ~/Desktop/second-brain-agent-v2
 - fcntl lock: `LOCK_EX | LOCK_NB` — OS auto-release при краше
 - Goal Tracker: JXA batch reads → Haiku трансформирует → постит в канал
 - FTS5: `tokenize='unicode61'` для русского текста
+- Digest: MAX_POSTS=60, max_turns=15, parse_mode=HTML (не markdown); fallback отправляет msg.result если send_digest не был вызван; задачи показываются с due_date и ⚠️ если просрочены
 
 ## Связь с v1
 
