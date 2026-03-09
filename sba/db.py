@@ -213,6 +213,60 @@ class Database:
 
         return row["id"], False
 
+    async def upsert_folder(
+        self, source: str, source_id: str, title: str, path: str = "",
+    ) -> tuple[int, bool]:
+        """Register a folder in files_registry. Does not overwrite existing status."""
+        async with self._conn.execute(
+            "INSERT OR IGNORE INTO files_registry (source, source_id, content_hash, title, path, type) VALUES (?,?,?,?,?,?)",
+            (source, source_id, "", title, path, "folder"),
+        ) as cur:
+            if cur.rowcount == 1:
+                await self._conn.commit()
+                return cur.lastrowid, True
+        async with self._conn.execute(
+            "SELECT id FROM files_registry WHERE source=? AND source_id=?",
+            (source, source_id),
+        ) as cur:
+            row = await cur.fetchone()
+            return row["id"], False
+
+    async def get_folder_status(self, source: str, source_id: str) -> Optional[str]:
+        """Return status of a registered folder, or None if not registered."""
+        async with self._conn.execute(
+            "SELECT status FROM files_registry WHERE source=? AND source_id=? AND type='folder'",
+            (source, source_id),
+        ) as cur:
+            row = await cur.fetchone()
+            return row["status"] if row else None
+
+    async def set_folder_status(self, source: str, source_id: str, status: str) -> None:
+        await self._conn.execute(
+            "UPDATE files_registry SET status=? WHERE source=? AND source_id=?",
+            (status, source, source_id),
+        )
+        await self._conn.commit()
+
+    async def set_folder_status_by_id(self, reg_id: int, status: str) -> None:
+        await self._conn.execute(
+            "UPDATE files_registry SET status=? WHERE id=?", (status, reg_id)
+        )
+        await self._conn.commit()
+
+    async def get_file_by_id(self, reg_id: int) -> Optional[dict]:
+        async with self._conn.execute(
+            "SELECT * FROM files_registry WHERE id=?", (reg_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def get_folders_by_status(self, status: str) -> list:
+        async with self._conn.execute(
+            "SELECT * FROM files_registry WHERE type='folder' AND status=? ORDER BY added_at ASC",
+            (status,),
+        ) as cur:
+            return [dict(row) for row in await cur.fetchall()]
+
     async def is_registered(self, source: str, source_id: str) -> bool:
         async with self._conn.execute(
             "SELECT 1 FROM files_registry WHERE source=? AND source_id=?",

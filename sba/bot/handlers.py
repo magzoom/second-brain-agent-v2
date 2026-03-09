@@ -215,6 +215,110 @@ async def handle_file_input(message: Message, bot: Bot) -> None:
         await message.answer(f"❌ Ошибка: {e}")
 
 
+# ── Folder indexing callbacks ─────────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("folder_deep:"))
+async def callback_folder_deep(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    reg_id = int(callback.data.split(":")[1])
+    async with Database(get_db_path(_config)) as db:
+        row = await db.get_file_by_id(reg_id)
+        if row:
+            await db.set_folder_status_by_id(reg_id, "pending_deep")
+            await callback.message.edit_text(
+                f"📂 <b>{row['title']}</b>\n✅ Добавлено в очередь — обработаю при следующем запуске"
+            )
+        else:
+            await callback.message.edit_text("⚠️ Запись не найдена")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("folder_summary:"))
+async def callback_folder_summary(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    reg_id = int(callback.data.split(":")[1])
+    await callback.message.edit_text("⏳ Создаю саммари...")
+    await callback.answer()
+
+    try:
+        import hashlib
+        async with Database(get_db_path(_config)) as db:
+            row = await db.get_file_by_id(reg_id)
+            if not row:
+                await callback.message.edit_text("⚠️ Запись не найдена")
+                return
+
+            title = row["title"]
+            path = row["path"] or title
+            source_id = row["source_id"]
+
+            # Run blocking Drive + Haiku calls in thread
+            result = await asyncio.to_thread(
+                _blocking_create_summary, _config, source_id, title, path
+            )
+
+            if result:
+                file_id, summary_text, web_link = result
+                # Register summary file as already processed (prevent inbox re-processing)
+                c_hash = hashlib.sha256(summary_text.encode()).hexdigest()
+                summary_reg_id, _ = await db.upsert_file(
+                    source="gdrive", source_id=file_id,
+                    content_hash=c_hash, title="_sba_summary.md",
+                    path=web_link,
+                )
+                await db.update_file_status(summary_reg_id, "processed")
+                # Index in FTS5
+                await db.index_content(
+                    source_id=file_id, source_type="gdrive",
+                    title=f"Саммари: {title}", content=summary_text,
+                )
+
+            await db.set_folder_status_by_id(reg_id, "folder_summary")
+            await callback.message.edit_text(
+                f"📝 <b>{title}</b>\n✅ Саммари создан и добавлен в базу знаний"
+            )
+    except Exception as e:
+        logger.error(f"callback_folder_summary failed: {e}", exc_info=True)
+        await callback.message.edit_text(f"❌ Ошибка создания саммари: {e}")
+
+
+def _blocking_create_summary(config: dict, folder_id: str, title: str, path: str) -> tuple:
+    """Sync: list folder, call Haiku, create _sba_summary.md in Drive. Returns (file_id, text, link)."""
+    import anthropic
+    from sba.integrations.google_drive import build_service, list_folder_contents, create_summary_file
+
+    service = build_service(config)
+    items = list(list_folder_contents(service, folder_id, False))
+
+    lines = []
+    for item in items[:30]:
+        prefix = "📁" if item.get("mimeType") == "application/vnd.google-apps.folder" else "📄"
+        lines.append(f"{prefix} {item.get('name', '')}")
+    if len(items) > 30:
+        lines.append(f"... и ещё {len(items) - 30} элементов")
+    listing = "\n".join(lines)
+
+    prompt = (
+        f"Создай краткое саммари для папки в системе личных знаний.\n\n"
+        f"Папка: {title}\nПуть: {path}\nСодержимое:\n{listing}\n\n"
+        f"Напиши markdown файл с разделами: # [название], ## Путь, ## Содержимое (список), "
+        f"## Описание (2-3 предложения что тут хранится и зачем). Только markdown."
+    )
+
+    client = anthropic.Anthropic(api_key=config.get("anthropic", {}).get("api_key", ""))
+    model = config.get("classifier", {}).get("model", "claude-haiku-4-5-20251001")
+    response = client.messages.create(
+        model=model, max_tokens=500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    summary_text = response.content[0].text.strip()
+
+    file_info = create_summary_file(service, folder_id, summary_text)
+    return file_info["id"], summary_text, file_info.get("webViewLink", "")
+
+
 # ── Deletion callbacks ────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("confirm_del:"))

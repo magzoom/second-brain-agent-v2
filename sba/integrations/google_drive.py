@@ -275,6 +275,28 @@ def metadata_hash(file_info: dict) -> str:
     ).hexdigest()
 
 
+def create_summary_file(service, folder_id: str, content: str) -> dict:
+    """Create _sba_summary.md in a Drive folder. Returns file metadata (id, webViewLink)."""
+    from googleapiclient.http import MediaInMemoryUpload
+
+    # Delete existing summary file if present
+    query = f"name='_sba_summary.md' and '{folder_id}' in parents and trashed=false"
+    existing = service.files().list(q=query, fields="files(id)").execute().get("files", [])
+    for f in existing:
+        try:
+            service.files().delete(fileId=f["id"]).execute()
+        except HttpError:
+            pass
+
+    metadata = {"name": "_sba_summary.md", "parents": [folder_id], "mimeType": "text/markdown"}
+    media = MediaInMemoryUpload(content.encode("utf-8"), mimetype="text/markdown")
+    file = service.files().create(
+        body=metadata, media_body=media, fields="id,name,webViewLink,mimeType",
+    ).execute()
+    logger.info(f"Created _sba_summary.md in folder {folder_id}: {file.get('id')}")
+    return file
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _is_google_workspace_type(mime_type: str) -> bool:

@@ -4,8 +4,9 @@ owner:
 schedule:
   inbox_interval_minutes: 120
   legacy_time: "09:00"
-  legacy_limit_drive: 3    # файлов из Google Drive за один запуск
-  legacy_limit_notes: 3    # заметок из Apple Notes за один запуск
+  legacy_limit_drive: 3       # файлов из Google Drive за один запуск (только для файлов без подпапок)
+  legacy_limit_notes: 3       # заметок из Apple Notes за один запуск
+  legacy_folders_per_run: 5   # сколько папок спрашивать за один запуск (кнопки Глубже/Саммари)
 
 categories:
   - 1_Health_Energy
@@ -54,16 +55,6 @@ anthropic:
 goal_tracker:
   channel_id: -1001234567890         # ID Telegram канала для Goal Tracker Diary
 
-index_rules:
-  # Паттерны по имени папки (fnmatch, регистр не важен).
-  # "*" — любые символы. Точное имя — без звёздочки.
-  skip_folders:
-    # - "Archive*"    # любая папка начинающаяся с Archive
-    # - "Code"        # точное имя
-    # - "Old_*"
-  summary_only_folders:
-    # - "ВРЦ"
-    # - "QazIndustry*"
 
 paths:
   db: ~/.sba/sba.db

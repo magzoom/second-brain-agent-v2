@@ -105,6 +105,74 @@ class Notifier:
             logger.error(f"Failed to send deletion request: {e}")
             return None
 
+    async def send_folder_decision(
+        self, reg_id: int, title: str, path: str,
+        subfolder_count: int, file_count: int,
+        suggestion: str, has_subfolders: bool,
+    ) -> Optional[int]:
+        """Send folder classification request with [Глубже] [Саммари] buttons."""
+        if not self._enabled:
+            return None
+
+        text = f"📁 <b>{title}</b>\nПуть: {path}\n"
+        counts = []
+        if subfolder_count:
+            counts.append(f"{subfolder_count} папок")
+        if file_count:
+            counts.append(f"{file_count} файлов")
+        if counts:
+            text += f"Внутри: {', '.join(counts)}\n"
+        if suggestion:
+            text += f"\nАгент: {suggestion}"
+
+        buttons = []
+        if has_subfolders:
+            buttons.append({"text": "📂 Глубже", "callback_data": f"folder_deep:{reg_id}"})
+        buttons.append({"text": "📝 Саммари", "callback_data": f"folder_summary:{reg_id}"})
+
+        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id, "text": text, "parse_mode": "HTML",
+            "reply_markup": {"inline_keyboard": [buttons]},
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        return data["result"]["message_id"]
+                    logger.error(f"send_folder_decision failed: {data}")
+                    return None
+        except Exception as e:
+            logger.error(f"send_folder_decision failed: {e}")
+            return None
+
+    async def send_media_notification(self, path: str, media_files: list) -> None:
+        """Notify about media files that may belong in Google Photos."""
+        if not self._enabled or not media_files:
+            return
+        names = ", ".join(media_files[:5])
+        if len(media_files) > 5:
+            names += f" и ещё {len(media_files) - 5}"
+        text = (f"📷 <b>Медиафайлы</b>\nПуть: {path}\n"
+                f"{len(media_files)} файлов: {names}\n\nВозможно стоит перенести в Google Photos.")
+        await self.send(text)
+
+    async def edit_message(self, message_id: int, text: str) -> bool:
+        """Edit an existing bot message."""
+        if not self._enabled:
+            return False
+        url = f"https://api.telegram.org/bot{self.token}/editMessageText"
+        payload = {"chat_id": self.chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    data = await resp.json()
+                    return data.get("ok", False)
+        except Exception as e:
+            logger.error(f"edit_message failed: {e}")
+            return False
+
     async def post_to_goal_tracker_channel(
         self, entries: list[tuple[str, str]], channel_id: int,
     ) -> bool:

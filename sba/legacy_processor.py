@@ -208,15 +208,35 @@ async def _goal_tracker(db: Database, notifier: Notifier, config: dict) -> None:
         logger.info(f"Goal Tracker: posted {len(new_entries)} achievements")
 
 
+FOLDER_MIME = "application/vnd.google-apps.folder"
+
+MEDIA_MIMES = {
+    "video/", "image/", "audio/",
+}
+BINARY_MIMES = {
+    "application/zip", "application/x-zip-compressed",
+    "application/x-dmg", "application/octet-stream",
+    "application/x-iso9660-image",
+}
+
+
+def _is_media(mime: str) -> bool:
+    return any(mime.startswith(m) for m in MEDIA_MIMES)
+
+
+def _is_binary(mime: str) -> bool:
+    return mime in BINARY_MIMES
+
+
 async def _process_gdrive_legacy(
     db: Database, notifier: Notifier, config: dict, stats: dict, limit: int
 ) -> None:
-    """Process unclassified files in Google Drive category folders.
+    """Process Google Drive category folders using hierarchical indexing strategy.
 
-    Uses hierarchical strategy from config index_rules:
-    - skip_folders: register as folder_skipped, do not descend
-    - summary_only_folders: index only README/main file, register as folder_summary
-    - everything else: full file-by-file processing (up to limit)
+    Each run:
+    1. Scans category folders and pending_deep folders for unclassified subfolders
+    2. Sends Telegram decisions (limit: legacy_folders_per_run per run)
+    3. Processes files directly in entered folders (no limit)
     """
     try:
         from sba.integrations.google_drive import (
@@ -232,137 +252,163 @@ async def _process_gdrive_legacy(
         stats["errors"] += 1
         return
 
-    index_rules = config.get("index_rules", {})
-    skip_patterns = index_rules.get("skip_folders", [])
-    summary_patterns = index_rules.get("summary_only_folders", [])
+    folders_per_run = int(config.get("schedule", {}).get("legacy_folders_per_run", 5))
+    decisions_counter = {"n": 0}
+
+    # Collect "entered" folders: category roots + pending_deep
+    entered: list[tuple[str, list[str]]] = []
 
     categories = config.get("categories", [])
-    counter = {"n": 0}  # mutable counter shared across recursive _walk_folder calls
-
     for folder_name in categories:
-        if counter["n"] >= limit:
-            break
-
         config_key = f"folder_{folder_name.replace(' ', '_').lower()}"
         folder_id = config.get("google_drive", {}).get(config_key, "")
-        if not folder_id:
+        if folder_id:
+            entered.append((folder_id, [folder_name]))
+        else:
             logger.warning(f"No folder_id for '{folder_name}' (key: {config_key})")
-            continue
 
+    # Add pending_deep folders (user said "go deeper" in previous runs)
+    for row in await db.get_folders_by_status("pending_deep"):
+        breadcrumb = row["path"] or row["title"]
+        path_stack = [p.strip() for p in breadcrumb.split(" / ")] if " / " in breadcrumb else [breadcrumb]
+        entered.append((row["source_id"], path_stack))
+
+    for folder_id, path_stack in entered:
+        if decisions_counter["n"] >= folders_per_run:
+            break
         try:
-            await _walk_folder(
+            await _scan_folder(
                 service=service, db=db, notifier=notifier, config=config,
-                folder_id=folder_id, skip_patterns=skip_patterns, summary_patterns=summary_patterns,
-                stats=stats, limit=limit, counter=counter,
+                folder_id=folder_id, path_stack=path_stack,
+                decisions_counter=decisions_counter, folders_per_run=folders_per_run,
+                stats=stats,
                 _list=list_folder_contents, _get=get_file_content, _hash=metadata_hash,
             )
         except Exception as e:
-            logger.error(f"Error processing Drive folder '{folder_name}': {e}")
+            logger.error(f"Error scanning folder '{' / '.join(path_stack)}': {e}")
             stats["errors"] += 1
 
 
-def _matches(name: str, patterns: list[str]) -> bool:
-    """Check if folder name matches any fnmatch pattern (case-insensitive)."""
-    import fnmatch
-    name_lower = name.lower()
-    return any(fnmatch.fnmatch(name_lower, p.lower()) for p in patterns)
-
-
-async def _walk_folder(
+async def _scan_folder(
     service, db: Database, notifier: Notifier, config: dict,
-    folder_id: str, skip_patterns: list, summary_patterns: list,
-    stats: dict, limit: int, counter: dict,
-    _list, _get, _hash,
+    folder_id: str, path_stack: list[str],
+    decisions_counter: dict, folders_per_run: int,
+    stats: dict, _list, _get, _hash,
 ) -> None:
-    """Non-recursive controlled traversal of a Drive folder.
+    """Scan one folder: send decisions for unclassified subfolders, process files directly."""
+    items = await asyncio.to_thread(lambda: list(_list(service, folder_id, False)))
 
-    For each subfolder encountered:
-    - name matches skip_patterns → register as folder_skipped (once), stop descent
-    - name matches summary_patterns → find README, index it, register as folder_summary (once)
-    - else → recurse
-    Files are processed normally (existing logic).
-    """
-    FOLDER_MIME = "application/vnd.google-apps.folder"
+    subfolders = [i for i in items if i.get("mimeType") == FOLDER_MIME]
+    files = [i for i in items if i.get("mimeType") != FOLDER_MIME]
 
-    items = await asyncio.to_thread(_list, service, folder_id, False)
+    # ── Subfolders: send decision or recurse into pending_deep ──────────────
+    for subfolder in subfolders:
+        if decisions_counter["n"] >= folders_per_run:
+            break
+        sub_id = subfolder.get("id", "")
+        sub_title = subfolder.get("name", "")
+        sub_path = " / ".join(path_stack + [sub_title])
 
-    for item in items:
-        if counter["n"] >= limit:
-            return
+        status = await db.get_folder_status("gdrive", sub_id)
 
-        mime = item.get("mimeType", "")
-        item_id = item.get("id", "")
-        title = item.get("name", "Untitled")
-
-        if mime == FOLDER_MIME:
-            if _matches(title, skip_patterns):
-                existing = await db.get_entry_type("gdrive", item_id)
-                if existing != "folder_skipped":
-                    await db.upsert_file(
-                        source="gdrive", source_id=item_id,
-                        title=title, path=item.get("webViewLink", ""),
-                        entry_type="folder_skipped",
-                    )
-                    logger.info(f"Folder skipped (rule): {title}")
-                # do not descend
-            elif _matches(title, summary_patterns):
-                existing = await db.get_entry_type("gdrive", item_id)
-                if existing == "folder_summary":
-                    continue  # already indexed
-                readme = await _find_readme(service, item_id, _list)
-                if readme:
-                    await _process_gdrive_file(
-                        file_info=readme, service=service, db=db, notifier=notifier,
-                        config=config, stats=stats, counter=counter, limit=limit,
-                        _get=_get, _hash=_hash,
-                    )
-                await db.upsert_file(
-                    source="gdrive", source_id=item_id,
-                    title=title, path=item.get("webViewLink", ""),
-                    entry_type="folder_summary",
-                )
-                logger.info(f"Folder summary indexed: {title}")
-                # do not descend further
-            else:
-                # Recurse into subfolder
-                await _walk_folder(
-                    service=service, db=db, notifier=notifier, config=config,
-                    folder_id=item_id, skip_patterns=skip_patterns, summary_patterns=summary_patterns,
-                    stats=stats, limit=limit, counter=counter,
-                    _list=_list, _get=_get, _hash=_hash,
-                )
-        else:
-            await _process_gdrive_file(
-                file_info=item, service=service, db=db, notifier=notifier,
-                config=config, stats=stats, counter=counter, limit=limit,
-                _get=_get, _hash=_hash,
+        if status is None:
+            await _send_folder_decision(
+                service=service, db=db, notifier=notifier, config=config,
+                folder_item=subfolder, path_stack=path_stack, sub_path=sub_path,
+                _list=_list,
             )
+            decisions_counter["n"] += 1
+
+        elif status == "pending_deep":
+            # Recurse — user already said "go deeper"
+            await _scan_folder(
+                service=service, db=db, notifier=notifier, config=config,
+                folder_id=sub_id, path_stack=path_stack + [sub_title],
+                decisions_counter=decisions_counter, folders_per_run=folders_per_run,
+                stats=stats, _list=_list, _get=_get, _hash=_hash,
+            )
+        # pending_decision / folder_summary / folder_done / folder_partial → skip
+
+    # ── Files: notify about media, process text files ───────────────────────
+    media_files = [f for f in files if _is_media(f.get("mimeType", ""))]
+    text_files = [
+        f for f in files
+        if not _is_media(f.get("mimeType", "")) and not _is_binary(f.get("mimeType", ""))
+    ]
+
+    if media_files:
+        await notifier.send_media_notification(
+            path=" / ".join(path_stack),
+            media_files=[f.get("name", "") for f in media_files],
+        )
+
+    for file_info in text_files:
+        await _process_gdrive_file(
+            file_info=file_info, service=service, db=db, notifier=notifier,
+            config=config, stats=stats, _get=_get, _hash=_hash,
+        )
 
 
-async def _find_readme(service, folder_id: str, _list) -> dict | None:
-    """Find a README or main summary file in a folder. Returns file_info dict or None."""
-    README_PATTERNS = ("readme", "_index", "_о папке", "summary", "overview", "main", "about")
+async def _send_folder_decision(
+    service, db: Database, notifier: Notifier, config: dict,
+    folder_item: dict, path_stack: list[str], sub_path: str, _list,
+) -> None:
+    """Register folder as pending_decision and send Telegram notification."""
+    import anthropic
+
+    folder_id = folder_item.get("id", "")
+    title = folder_item.get("name", "")
+
+    # List contents for the notification and agent suggestion
     try:
-        items = await asyncio.to_thread(_list, service, folder_id, False)
-        for item in items:
-            if item.get("mimeType", "") == "application/vnd.google-apps.folder":
-                continue
-            name_lower = item.get("name", "").lower()
-            if any(name_lower.startswith(p) for p in README_PATTERNS):
-                return item
+        contents = await asyncio.to_thread(lambda: list(_list(service, folder_id, False)))
+    except Exception:
+        contents = []
+
+    subfolders = [i for i in contents if i.get("mimeType") == FOLDER_MIME]
+    files = [i for i in contents if i.get("mimeType") != FOLDER_MIME]
+
+    # Register in DB as pending_decision
+    reg_id, _ = await db.upsert_folder("gdrive", folder_id, title, sub_path)
+    await db.set_folder_status("gdrive", folder_id, "pending_decision")
+
+    # Generate agent suggestion (Haiku, only names — no content reads)
+    suggestion = ""
+    try:
+        lines = [f"📁 {i.get('name')}" for i in subfolders[:15]]
+        lines += [f"📄 {i.get('name')}" for i in files[:15]]
+        if len(contents) > 30:
+            lines.append(f"... и ещё {len(contents) - 30}")
+        listing = "\n".join(lines)
+
+        api_key = config.get("anthropic", {}).get("api_key", "")
+        model = config.get("classifier", {}).get("model", "claude-haiku-4-5-20251001")
+        client = anthropic.Anthropic(api_key=api_key)
+        resp = await asyncio.to_thread(
+            lambda: client.messages.create(
+                model=model, max_tokens=80,
+                messages=[{"role": "user", "content":
+                    f"Папка: {title}\nПуть: {sub_path}\nСодержимое:\n{listing}\n\n"
+                    f"Одним предложением: что это за папка? Только описание."}],
+            )
+        )
+        suggestion = resp.content[0].text.strip()
     except Exception as e:
-        logger.warning(f"_find_readme failed for folder {folder_id}: {e}")
-    return None
+        logger.warning(f"Folder suggestion failed for '{title}': {e}")
+
+    await notifier.send_folder_decision(
+        reg_id=reg_id, title=title, path=sub_path,
+        subfolder_count=len(subfolders), file_count=len(files),
+        suggestion=suggestion, has_subfolders=bool(subfolders),
+    )
+    logger.info(f"Sent folder decision: {sub_path}")
 
 
 async def _process_gdrive_file(
     file_info: dict, service, db: Database, notifier: Notifier, config: dict,
-    stats: dict, counter: dict, limit: int, _get, _hash,
+    stats: dict, _get, _hash,
 ) -> None:
     """Process a single Drive file: upsert registry, read content, run agent."""
-    if counter["n"] >= limit:
-        return
-
     file_id = file_info.get("id", "")
     mime = file_info.get("mimeType", "")
     title = file_info.get("name", "Untitled")
@@ -389,7 +435,6 @@ async def _process_gdrive_file(
         source="gdrive", source_id=file_id,
         title=title, content=content_text, stats=stats,
     )
-    counter["n"] += 1
 
 
 async def _process_apple_notes_legacy(
