@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Second Brain Agent 2.0 — Руководство</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f7; color: #1d1d1f; line-height: 1.6; }
+
+  .hero { background: linear-gradient(135deg, #1c1c1e 0%, #2c2c2e 100%); color: white; padding: 60px 40px; text-align: center; }
+  .hero h1 { font-size: 2.8em; font-weight: 700; letter-spacing: -0.5px; }
+  .hero p { font-size: 1.15em; opacity: 0.7; margin-top: 12px; max-width: 600px; margin-left: auto; margin-right: auto; }
+  .hero .version { display: inline-block; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 20px; padding: 4px 14px; font-size: 0.8em; margin-top: 16px; }
+
+  .container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+
+  .status-bar { background: white; border-radius: 16px; padding: 24px 28px; margin-bottom: 32px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); display: flex; gap: 20px; flex-wrap: wrap; }
+  .status-item { display: flex; align-items: center; gap: 8px; font-size: 0.95em; }
+  .status-item .dot { width: 8px; height: 8px; border-radius: 50%; background: #30d158; }
+
+  .section { background: white; border-radius: 16px; padding: 28px; margin-bottom: 24px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+  .section h2 { font-size: 1.3em; font-weight: 600; margin-bottom: 18px; display: flex; align-items: center; gap: 10px; }
+  .section h2 .icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1em; flex-shrink: 0; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th { text-align: left; padding: 10px 14px; background: #f5f5f7; font-size: 0.85em; font-weight: 600; color: #6e6e73; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 12px 14px; border-top: 1px solid #f0f0f0; font-size: 0.95em; vertical-align: top; }
+  tr:hover td { background: #fafafa; }
+  td:first-child { font-family: "SF Mono", monospace; font-size: 0.88em; color: #007aff; }
+
+  .example-msg { background: #007aff; color: white; border-radius: 18px 18px 4px 18px; padding: 10px 16px; display: inline-block; font-size: 0.95em; margin: 4px 0; }
+  .bot-reply { background: #e9e9eb; color: #1d1d1f; border-radius: 18px 18px 18px 4px; padding: 10px 16px; display: inline-block; font-size: 0.95em; margin: 4px 0; }
+  .chat-row { margin: 12px 0; }
+  .chat-row.user { text-align: right; }
+  .chat-row.bot { text-align: left; }
+
+  .daemon-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-top: 8px; }
+  .daemon-card { background: #f5f5f7; border-radius: 12px; padding: 16px; }
+  .daemon-card .name { font-family: "SF Mono", monospace; font-size: 0.82em; color: #007aff; margin-bottom: 6px; }
+  .daemon-card .desc { font-size: 0.9em; color: #1d1d1f; font-weight: 600; margin-bottom: 4px; }
+  .daemon-card .schedule { font-size: 0.82em; color: #6e6e73; }
+
+  .cat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
+  .cat-card { background: #f5f5f7; border-radius: 12px; padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; }
+  .cat-card .num { font-size: 1.4em; flex-shrink: 0; }
+  .cat-card .text .title { font-weight: 600; font-size: 0.95em; }
+  .cat-card .text .sub { font-size: 0.82em; color: #6e6e73; margin-top: 2px; }
+
+  .cmd-block { background: #1c1c1e; border-radius: 12px; padding: 16px 20px; margin-top: 12px; }
+  .cmd-block code { color: #30d158; font-family: "SF Mono", monospace; font-size: 0.88em; display: block; line-height: 2; }
+  .cmd-block code .comment { color: #636366; }
+
+  .flow { display: flex; gap: 0; margin: 16px 0; flex-wrap: wrap; }
+  .flow-step { flex: 1; min-width: 140px; background: #f5f5f7; border-radius: 12px; padding: 16px; text-align: center; position: relative; }
+  .flow-step:not(:last-child)::after { content: "→"; position: absolute; right: -14px; top: 50%; transform: translateY(-50%); font-size: 1.2em; color: #8e8e93; z-index: 1; }
+  .flow-step .step-icon { font-size: 1.6em; margin-bottom: 8px; }
+  .flow-step .step-title { font-weight: 600; font-size: 0.9em; }
+  .flow-step .step-sub { font-size: 0.78em; color: #6e6e73; margin-top: 4px; }
+
+  .tip { background: #e8f4fd; border-left: 3px solid #007aff; border-radius: 0 8px 8px 0; padding: 12px 16px; margin-top: 12px; font-size: 0.9em; }
+  .warn { background: #fff8e6; border-left: 3px solid #ff9f0a; border-radius: 0 8px 8px 0; padding: 12px 16px; margin-top: 12px; font-size: 0.9em; }
+
+  footer { text-align: center; color: #8e8e93; font-size: 0.85em; padding: 40px 20px; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>🧠 Second Brain Agent</h1>
+  <p>Персональный AI-агент. Говори свободным текстом — система сама разберётся.</p>
+  <div class="version">v2.0 · Claude Agent SDK · macOS</div>
+</div>
+
+<div class="container">
+
+  <!-- Статус демонов -->
+  <div class="status-bar">
+    <div class="status-item"><div class="dot"></div> com.sba.bot — работает постоянно</div>
+    <div class="status-item"><div class="dot"></div> com.sba.inbox — каждые 2 часа</div>
+    <div class="status-item"><div class="dot"></div> com.sba.legacy — 09:00 ежедневно</div>
+    <div class="status-item"><div class="dot"></div> com.sba.digest — 08:00 ежедневно</div>
+  </div>
+
+  <!-- Как общаться с ботом -->
+  <div class="section">
+    <h2><span class="icon" style="background:#007aff20">💬</span> Как общаться с ботом</h2>
+    <p style="color:#6e6e73; margin-bottom:20px;">Никаких команд — только свободный текст на русском языке.</p>
+
+    <div class="chat-row user"><div class="example-msg">что на сегодня?</div></div>
+    <div class="chat-row bot"><div class="bot-reply">На сегодня задач нет. Свободный день! 🎉</div></div>
+
+    <div class="chat-row user" style="margin-top:16px"><div class="example-msg">напомни позвонить врачу в пятницу</div></div>
+    <div class="chat-row bot"><div class="bot-reply">Создана задача «Позвонить врачу» на 07/03/2026 в 1_Health_Energy.</div></div>
+
+    <div class="chat-row user" style="margin-top:16px"><div class="example-msg">найди мои заметки про ВРЦ</div></div>
+    <div class="chat-row bot"><div class="bot-reply">📎 Архитектура ВРЦ [gdrive] — системы S1–S8, цифровизация...<br>📎 ВРЦ встреча 15.02 [apple_notes] — итоги встречи с подрядчиком...</div></div>
+
+    <div class="chat-row user" style="margin-top:16px"><div class="example-msg">изучи тему ИИ в медицине</div></div>
+    <div class="chat-row bot"><div class="bot-reply">🔍 Запускаю исследовательский агент... [через 30 сек] Синтез из 5 источников: ИИ в диагностике применяется в...</div></div>
+  </div>
+
+  <!-- Что умеет -->
+  <div class="section">
+    <h2><span class="icon" style="background:#30d15820">⚡</span> Возможности</h2>
+    <table>
+      <tr><th>Запрос</th><th>Действие</th></tr>
+      <tr><td>что на сегодня?</td><td>Задачи с дедлайном сегодня или просроченные из Google Tasks</td></tr>
+      <tr><td>что на неделе?</td><td>Задачи на ближайшие 7 дней</td></tr>
+      <tr><td>напомни [задача] в [дата]</td><td>Создаёт задачу в Google Tasks в нужной категории</td></tr>
+      <tr><td>найди про [тема]</td><td>Поиск по FTS5 базе знаний (Google Drive + Apple Notes)</td></tr>
+      <tr><td>изучи тему [тема]</td><td>Research Agent: интернет + личная база</td></tr>
+      <tr><td>создай заметку [текст]</td><td>Новая заметка в Apple Notes в нужной категории</td></tr>
+      <tr><td>файл/фото</td><td>Загружает в Google Drive Inbox → обрабатывается при следующем inbox</td></tr>
+      <tr><td>/status</td><td>Статистика базы данных</td></tr>
+      <tr><td>/log</td><td>Последние строки лога бота</td></tr>
+    </table>
+  </div>
+
+  <!-- Как обрабатываются входящие -->
+  <div class="section">
+    <h2><span class="icon" style="background:#ff9f0a20">📥</span> Как работает Inbox (каждые 2 часа)</h2>
+    <div class="flow">
+      <div class="flow-step">
+        <div class="step-icon">📂</div>
+        <div class="step-title">Источник</div>
+        <div class="step-sub">Google Drive Inbox или Apple Notes Inbox</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-icon">🤖</div>
+        <div class="step-title">Main Agent</div>
+        <div class="step-sub">Анализирует содержимое</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-icon">📋</div>
+        <div class="step-title">action → задача</div>
+        <div class="step-sub">Google Tasks + опционально Calendar</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-icon">📁</div>
+        <div class="step-title">info → архив</div>
+        <div class="step-sub">Перемещается в категорию + индексируется</div>
+      </div>
+      <div class="flow-step">
+        <div class="step-icon">🗑</div>
+        <div class="step-title">мусор → confirm</div>
+        <div class="step-sub">Кнопки ✅/❌ в боте</div>
+      </div>
+    </div>
+    <div class="tip">💡 Поставь в паузу (создай файл <code style="background:#d0eaff;padding:1px 6px;border-radius:4px">~/.sba/PAUSED</code>) чтобы временно остановить inbox.</div>
+  </div>
+
+  <!-- Goal Tracker -->
+  <div class="section">
+    <h2><span class="icon" style="background:#ff375f20">🏆</span> Goal Tracker Diary</h2>
+    <p>Каждый день в 09:00 legacy автоматически:</p>
+    <ol style="margin: 12px 0 0 20px; line-height: 2.2; font-size: 0.95em;">
+      <li>Читает задачи, выполненные за последние 3 дня из Google Tasks</li>
+      <li>Трансформирует их через Claude в достижения ("Позвонил врачу" → "Позаботился о здоровье")</li>
+      <li>Публикует в канал <strong>Goal Tracker Diary</strong> с датой и категорией</li>
+    </ol>
+    <div class="tip">✅ Дубликаты исключены — каждая задача публикуется один раз.</div>
+  </div>
+
+  <!-- Категории -->
+  <div class="section">
+    <h2><span class="icon" style="background:#5856d620">🗂</span> Категории жизни</h2>
+    <div class="cat-grid">
+      <div class="cat-card"><div class="num">💪</div><div class="text"><div class="title">1_Health_Energy</div><div class="sub">здоровье, спорт, питание, медицина</div></div></div>
+      <div class="cat-card"><div class="num">💼</div><div class="text"><div class="title">2_Business_Career</div><div class="sub">работа, проекты, карьера, бизнес</div></div></div>
+      <div class="cat-card"><div class="num">💰</div><div class="text"><div class="title">3_Finance</div><div class="sub">деньги, инвестиции, бюджет</div></div></div>
+      <div class="cat-card"><div class="num">👨‍👩‍👧</div><div class="text"><div class="title">4_Family_Relationships</div><div class="sub">семья, отношения, друзья</div></div></div>
+      <div class="cat-card"><div class="num">📚</div><div class="text"><div class="title">5_Personal Growth</div><div class="sub">обучение, саморазвитие, навыки</div></div></div>
+      <div class="cat-card"><div class="num">✨</div><div class="text"><div class="title">6_Brightness life</div><div class="sub">путешествия, хобби, развлечения</div></div></div>
+      <div class="cat-card"><div class="num">🕊</div><div class="text"><div class="title">7_Spirituality</div><div class="sub">ценности, смысл, рефлексия</div></div></div>
+    </div>
+  </div>
+
+  <!-- Фоновые процессы -->
+  <div class="section">
+    <h2><span class="icon" style="background:#34c75920">⚙️</span> Фоновые процессы</h2>
+    <div class="daemon-grid">
+      <div class="daemon-card">
+        <div class="name">com.sba.bot</div>
+        <div class="desc">Telegram бот</div>
+        <div class="schedule">Всегда активен (KeepAlive)</div>
+      </div>
+      <div class="daemon-card">
+        <div class="name">com.sba.inbox</div>
+        <div class="desc">Обработка Inbox</div>
+        <div class="schedule">Каждые 2 часа</div>
+      </div>
+      <div class="daemon-card">
+        <div class="name">com.sba.legacy</div>
+        <div class="desc">Архив + Goal Tracker</div>
+        <div class="schedule">Ежедневно в 09:00</div>
+      </div>
+      <div class="daemon-card">
+        <div class="name">com.sba.digest</div>
+        <div class="desc">Утренний дайджест</div>
+        <div class="schedule">Ежедневно в 08:00</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Команды -->
+  <div class="section">
+    <h2><span class="icon" style="background:#00000010">🖥</span> Команды терминала</h2>
+    <div class="cmd-block">
+      <code><span class="comment"># Проверить все интеграции</span></code>
+      <code>.venv/bin/sba check</code>
+      <code>&nbsp;</code>
+      <code><span class="comment"># Статистика базы</span></code>
+      <code>.venv/bin/sba status</code>
+      <code>&nbsp;</code>
+      <code><span class="comment"># Запустить вручную</span></code>
+      <code>.venv/bin/sba inbox</code>
+      <code>.venv/bin/sba legacy</code>
+      <code>&nbsp;</code>
+      <code><span class="comment"># Демоны</span></code>
+      <code>.venv/bin/sba service status</code>
+      <code>.venv/bin/sba service install all</code>
+      <code>.venv/bin/sba service logs bot</code>
+      <code>&nbsp;</code>
+      <code><span class="comment"># После изменений кода</span></code>
+      <code>.venv/bin/pip install . --force-reinstall</code>
+      <code>.venv/bin/sba service install all</code>
+    </div>
+  </div>
+
+  <!-- Удаление -->
+  <div class="section">
+    <h2><span class="icon" style="background:#ff453a20">🗑</span> Безопасное удаление</h2>
+    <p>Система <strong>никогда</strong> не удаляет файлы без подтверждения.</p>
+    <div class="flow" style="margin-top: 16px;">
+      <div class="flow-step"><div class="step-icon">🤖</div><div class="step-title">Агент решает</div><div class="step-sub">Файл — мусор</div></div>
+      <div class="flow-step"><div class="step-icon">📱</div><div class="step-title">Сообщение в бот</div><div class="step-sub">Кнопки ✅ / ❌</div></div>
+      <div class="flow-step"><div class="step-icon">✅</div><div class="step-title">Подтверждение</div><div class="step-sub">Нажми ✅ в боте</div></div>
+      <div class="flow-step"><div class="step-icon">🗑</div><div class="step-title">Удаление</div><div class="step-sub">Legacy в 09:00</div></div>
+    </div>
+  </div>
+
+  <!-- Решение проблем -->
+  <div class="section">
+    <h2><span class="icon" style="background:#ff9f0a20">🔧</span> Решение проблем</h2>
+    <table>
+      <tr><th>Проблема</th><th>Решение</th></tr>
+      <tr>
+        <td>Бот не отвечает</td>
+        <td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">launchctl list | grep com.sba.bot</code> — должен быть PID.<br>Если нет: <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">.venv/bin/sba service install bot</code></td>
+      </tr>
+      <tr>
+        <td>Apple Notes зависают</td>
+        <td>System Settings → Privacy &amp; Security → Automation → разрешить python3.12 доступ к Notes</td>
+      </tr>
+      <tr>
+        <td>Google Drive: ошибка авторизации</td>
+        <td>Удалить <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">~/.sba/google_token.json</code>, переавторизоваться</td>
+      </tr>
+      <tr>
+        <td>Бот отвечает «что-то пошло не так»</td>
+        <td>Написать <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">/log</code> в бот или проверить <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">~/.sba/logs/sba-bot.log</code></td>
+      </tr>
+      <tr>
+        <td>Inbox не обрабатывает файлы</td>
+        <td>Проверить <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">~/.sba/PAUSED</code> — если файл есть, удалить его</td>
+      </tr>
+    </table>
+  </div>
+
+</div>
+
+<footer>
+  Second Brain Agent 2.0 · Claude Agent SDK · @magzoom_agent_bot
+</footer>
+
+</body>
+</html>

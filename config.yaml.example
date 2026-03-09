@@ -1,0 +1,61 @@
+owner:
+  telegram_chat_id: 123456789        # узнать через @userinfobot в Telegram
+
+schedule:
+  inbox_interval_minutes: 120
+  legacy_time: "09:00"
+  legacy_limit_drive: 3    # файлов из Google Drive за один запуск
+  legacy_limit_notes: 3    # заметок из Apple Notes за один запуск
+
+categories:
+  - 1_Health_Energy
+  - 2_Business_Career
+  - 3_Finance
+  - 4_Family_Relationships
+  - 5_Personal Growth
+  - 6_Brightness life
+  - 7_Spirituality
+
+calendar:
+  primary: apple
+
+classifier:
+  model: claude-haiku-4-5-20251001   # или claude-sonnet-4-6 для лучшего качества
+  max_content_length: 2000
+
+dedup:
+  method: sentence_transformers
+  duplicate_threshold: 0.95
+  review_threshold: 0.80
+  overlap_threshold: 0.60
+
+telegram_bot:
+  token: "BOT_TOKEN_HERE"            # получить у @BotFather
+
+telegram_userbot:
+  api_id: 12345678                   # my.telegram.org → API development tools
+  api_hash: "YOUR_API_HASH_HERE"
+
+google_drive:
+  inbox_folder_id: "FOLDER_ID_HERE"               # ID папки Inbox в Drive
+  folder_1_health_energy: "FOLDER_ID_HERE"
+  folder_2_business_career: "FOLDER_ID_HERE"
+  folder_3_finance: "FOLDER_ID_HERE"
+  folder_4_family_relationships: "FOLDER_ID_HERE"
+  folder_5_personal_growth: "FOLDER_ID_HERE"
+  folder_6_brightness_life: "FOLDER_ID_HERE"
+  folder_7_spirituality: "FOLDER_ID_HERE"
+  credentials_file: ~/.sba/google_credentials.json
+  token_file: ~/.sba/google_token.json
+
+anthropic:
+  api_key: "sk-ant-..."              # console.anthropic.com
+
+goal_tracker:
+  channel_id: -1001234567890         # ID Telegram канала для Goal Tracker Diary
+
+paths:
+  db: ~/.sba/sba.db
+  logs: ~/.sba/logs/
+  lock: ~/.sba/locks/
+  quarantine: ~/.sba/quarantine/
