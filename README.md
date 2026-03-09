@@ -36,7 +36,9 @@ You (Telegram)  ──▶  Main Agent (Claude)
 - Classifies each item: action / archive / delete
 
 **Every day at 09:00** → Legacy processor:
-- Indexes unclassified files from Google Drive and Apple Notes
+- Walks Google Drive top-down, sends folder decision buttons to Telegram (📂 Deeper / 📝 Summary)
+- On "Summary": AI generates a markdown description from file names, saves `_sba_summary.md` in Drive, indexes in FTS5
+- On "Deeper": descends into subfolders on the next run (up to `legacy_folders_per_run` decisions per run)
 - Posts completed tasks to your Goal Tracker Diary Telegram channel
 - Rolls over overdue tasks to today
 
@@ -172,6 +174,7 @@ Put your `credentials.json` from [Google Cloud Console](https://console.cloud.go
 Required Google API scopes (enabled in Cloud Console):
 - Google Drive API
 - Google Tasks API
+- Google Calendar API
 
 ### 4. Authorize Telegram userbot (for digest channel reading)
 
@@ -255,12 +258,13 @@ sba/
 ├── bot/
 │   ├── bot.py            # aiogram 3.x setup
 │   ├── handlers.py       # message and callback handlers
-│   └── keyboards.py      # inline keyboards for deletion confirmations
+│   └── keyboards.py      # inline keyboards (deletion + folder decisions)
 └── integrations/
     ├── apple_notes.py    # JXA read + AppleScript write
-    ├── apple_calendar.py # AppleScript calendar events
-    ├── google_drive.py   # Drive API (OAuth2, changes, upload)
+    ├── apple_calendar.py # AppleScript calendar events (kept for compatibility)
+    ├── google_drive.py   # Drive API (OAuth2, changes, upload, summary files)
     ├── google_tasks.py   # Tasks API (create, today, rollover)
+    ├── google_calendar.py # Calendar API (OAuth2, create events)
     └── checker.py        # integration health checks
 
 ~/.sba/

@@ -228,6 +228,24 @@
     </div>
   </div>
 
+  <!-- Индексация архива -->
+  <div class="section">
+    <h2><span class="icon" style="background:#5e5ce620">📂</span> Индексация архива Google Drive</h2>
+    <p style="color:#6e6e73; margin-bottom:16px;">Legacy обходит папки сверху вниз и спрашивает тебя что с ними делать — вместо того чтобы слепо читать тысячи файлов.</p>
+    <div class="flow">
+      <div class="flow-step"><div class="step-icon">📁</div><div class="step-title">Новая папка</div><div class="step-sub">Найдена при обходе Drive</div></div>
+      <div class="flow-step"><div class="step-icon">🤖</div><div class="step-title">AI-подсказка</div><div class="step-sub">Haiku анализирует имена файлов</div></div>
+      <div class="flow-step"><div class="step-icon">📱</div><div class="step-title">Telegram-решение</div><div class="step-sub">Кнопки 📂 Глубже / 📝 Саммари</div></div>
+      <div class="flow-step"><div class="step-icon">✅</div><div class="step-title">Выполнено</div><div class="step-sub">Статус сохранён в БД навсегда</div></div>
+    </div>
+    <table style="margin-top:16px;">
+      <tr><th>Кнопка</th><th>Что происходит</th></tr>
+      <tr><td>📂 Глубже</td><td>Папка помечается как <code style="background:#f0f0f0;padding:1px 5px;border-radius:4px">pending_deep</code> — при следующем запуске legacy войдёт внутрь и предложит решение по каждой подпапке</td></tr>
+      <tr><td>📝 Саммари</td><td>Haiku создаёт markdown-описание по именам файлов, сохраняет <code style="background:#f0f0f0;padding:1px 5px;border-radius:4px">_sba_summary.md</code> в Drive и индексирует в FTS5 базу знаний</td></tr>
+    </table>
+    <div class="tip">💡 До 5 решений за один запуск (<code style="background:#d0eaff;padding:1px 6px;border-radius:4px">legacy_folders_per_run</code> в config). Медиафайлы (.mp4, .jpg) — только уведомление, без кнопок.</div>
+  </div>
+
   <!-- Удаление -->
   <div class="section">
     <h2><span class="icon" style="background:#ff453a20">🗑</span> Безопасное удаление</h2>
@@ -271,7 +289,7 @@
 </div>
 
 <footer>
-  Second Brain Agent 2.0 · Claude Agent SDK · @magzoom_agent_bot
+  Second Brain Agent 2.0 · Claude Agent SDK
 </footer>
 
 </body>

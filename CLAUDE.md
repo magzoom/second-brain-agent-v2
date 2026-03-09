@@ -28,8 +28,8 @@ sba/
   notifier.py       — Telegram send helpers
   bot/
     bot.py          — aiogram 3.x setup
-    handlers.py     — conversational handlers (no /commands)
-    keyboards.py    — inline keyboards
+    handlers.py     — conversational handlers + folder_deep/folder_summary callbacks
+    keyboards.py    — inline keyboards: confirm_delete + folder_decision
   integrations/
     apple_notes.py
     apple_calendar.py   ← не используется агентом, оставлен для совместимости
@@ -78,6 +78,25 @@ cd ~/Desktop/second-brain-agent-v2
 - Tool handlers: `async def handler(args: dict) -> {"content": [{"type": "text", "text": "..."}]}`
 - SDK запускает Claude Code CLI как subprocess → нельзя вложенно из Claude Code сессии
 - Module-level globals `_db`, `_notifier`, `_config` — injected via `setup()`
+
+## Иерархическая индексация Drive (legacy)
+
+- `_scan_folder(service, db, notifier, config, folder_id, path_stack, decisions_counter, ...)` — рекурсивный обход
+- `_send_folder_decision(...)` — регистрирует как `pending_decision`, вызывает Haiku для подсказки, шлёт кнопки в Telegram
+- Статусы папок (type='folder'): `pending_decision` → `pending_deep` | `folder_summary` | `folder_done`
+- `path_stack: list[str]` — хлебные крошки; путь хранится в поле `path` в БД, восстанавливается при `pending_deep`
+- `_sba_summary.md` создаётся в Drive через `create_summary_file()`, регистрируется как `processed` (inbox пропускает)
+- `decisions_counter: dict` — mutable счётчик через recursive calls; стоп при `>= legacy_folders_per_run`
+- `asyncio.to_thread(lambda: list(_list(service, folder_id, False)))` — generator→list in thread
+
+## DB — методы для папок (db.py)
+
+- `upsert_folder(source, source_id, title, path)` → `(reg_id, is_new)` — INSERT OR IGNORE, не перезаписывает статус
+- `get_folder_status(source, source_id)` → `Optional[str]`
+- `set_folder_status(source, source_id, status)`, `set_folder_status_by_id(reg_id, status)`, `get_file_by_id(reg_id)`
+- `get_folders_by_status(status)` → `list`
+- `get_entry_type(source, source_id)` → `Optional[str]`
+- `upsert_file` — добавлен `entry_type: str = "file"`, UPDATE ветка включает `type=?`
 
 ## Ключевые паттерны
 
