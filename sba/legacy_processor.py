@@ -28,7 +28,7 @@ async def run(config: dict) -> None:
     """Main entry point for legacy processing."""
     notifier = Notifier(config)
     db_path = get_db_path(config)
-    lock_fd = acquire_lock()
+    lock_fd = acquire_lock(LOCK_FILE)
 
     # Backup DB before processing
     _backup_db(db_path)

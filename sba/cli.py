@@ -28,7 +28,11 @@ def _load_config() -> dict:
         click.echo(f"❌ Config not found: {config_path}", err=True)
         sys.exit(1)
     with open(config_path) as f:
-        return yaml.safe_load(f) or {}
+        config = yaml.safe_load(f) or {}
+    # Run DB migrations on every startup
+    from sba.db import init_db_sync, get_db_path
+    init_db_sync(get_db_path(config))
+    return config
 
 
 def _setup_logging(config: dict) -> None:
