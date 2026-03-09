@@ -233,8 +233,8 @@ async def _process_gdrive_legacy(
         return
 
     index_rules = config.get("index_rules", {})
-    skip_set = set(index_rules.get("skip_folders", []))
-    summary_set = set(index_rules.get("summary_only_folders", []))
+    skip_patterns = index_rules.get("skip_folders", [])
+    summary_patterns = index_rules.get("summary_only_folders", [])
 
     categories = config.get("categories", [])
     counter = {"n": 0}  # mutable counter shared across recursive _walk_folder calls
@@ -252,7 +252,7 @@ async def _process_gdrive_legacy(
         try:
             await _walk_folder(
                 service=service, db=db, notifier=notifier, config=config,
-                folder_id=folder_id, skip_set=skip_set, summary_set=summary_set,
+                folder_id=folder_id, skip_patterns=skip_patterns, summary_patterns=summary_patterns,
                 stats=stats, limit=limit, counter=counter,
                 _list=list_folder_contents, _get=get_file_content, _hash=metadata_hash,
             )
@@ -261,19 +261,26 @@ async def _process_gdrive_legacy(
             stats["errors"] += 1
 
 
+def _matches(name: str, patterns: list[str]) -> bool:
+    """Check if folder name matches any fnmatch pattern (case-insensitive)."""
+    import fnmatch
+    name_lower = name.lower()
+    return any(fnmatch.fnmatch(name_lower, p.lower()) for p in patterns)
+
+
 async def _walk_folder(
     service, db: Database, notifier: Notifier, config: dict,
-    folder_id: str, skip_set: set, summary_set: set,
+    folder_id: str, skip_patterns: list, summary_patterns: list,
     stats: dict, limit: int, counter: dict,
     _list, _get, _hash,
 ) -> None:
     """Non-recursive controlled traversal of a Drive folder.
 
-    For each item:
-    - subfolder in skip_set → register as folder_skipped (once), stop descent
-    - subfolder in summary_set → find README, index it, register as folder_summary (once)
-    - subfolder else → recurse
-    - file → process normally (existing logic)
+    For each subfolder encountered:
+    - name matches skip_patterns → register as folder_skipped (once), stop descent
+    - name matches summary_patterns → find README, index it, register as folder_summary (once)
+    - else → recurse
+    Files are processed normally (existing logic).
     """
     FOLDER_MIME = "application/vnd.google-apps.folder"
 
@@ -288,7 +295,7 @@ async def _walk_folder(
         title = item.get("name", "Untitled")
 
         if mime == FOLDER_MIME:
-            if item_id in skip_set:
+            if _matches(title, skip_patterns):
                 existing = await db.get_entry_type("gdrive", item_id)
                 if existing != "folder_skipped":
                     await db.upsert_file(
@@ -298,7 +305,7 @@ async def _walk_folder(
                     )
                     logger.info(f"Folder skipped (rule): {title}")
                 # do not descend
-            elif item_id in summary_set:
+            elif _matches(title, summary_patterns):
                 existing = await db.get_entry_type("gdrive", item_id)
                 if existing == "folder_summary":
                     continue  # already indexed
@@ -320,7 +327,7 @@ async def _walk_folder(
                 # Recurse into subfolder
                 await _walk_folder(
                     service=service, db=db, notifier=notifier, config=config,
-                    folder_id=item_id, skip_set=skip_set, summary_set=summary_set,
+                    folder_id=item_id, skip_patterns=skip_patterns, summary_patterns=summary_patterns,
                     stats=stats, limit=limit, counter=counter,
                     _list=_list, _get=_get, _hash=_hash,
                 )
