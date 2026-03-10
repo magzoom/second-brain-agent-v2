@@ -221,7 +221,10 @@ async def handle_file_input(message: Message, bot: Bot) -> None:
 async def callback_folder_deep(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     reg_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         row = await db.get_file_by_id(reg_id)
@@ -246,7 +249,10 @@ async def callback_folder_deep(callback: CallbackQuery) -> None:
 async def callback_folder_summary(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     reg_id = int(callback.data.split(":")[1])
 
     async with Database(get_db_path(_config)) as db:
@@ -349,7 +355,10 @@ def _blocking_create_summary(config: dict, folder_id: str, title: str, path: str
 async def callback_confirm_del(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     deletion_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         result = await db.confirm_deletion(deletion_id)
@@ -366,7 +375,10 @@ async def callback_confirm_del(callback: CallbackQuery) -> None:
 async def callback_cancel_del(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
-    await callback.answer()
+    try:
+        await callback.answer()
+    except Exception:
+        pass
     deletion_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         await db._conn.execute(
