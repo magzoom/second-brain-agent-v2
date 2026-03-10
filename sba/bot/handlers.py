@@ -221,41 +221,50 @@ async def handle_file_input(message: Message, bot: Bot) -> None:
 async def callback_folder_deep(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
+    await callback.answer()
     reg_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         row = await db.get_file_by_id(reg_id)
         if not row:
-            await callback.message.edit_text("⚠️ Запись не найдена")
-            await callback.answer()
+            try:
+                await callback.message.edit_text("⚠️ Запись не найдена")
+            except Exception:
+                pass
             return
         if row.get("status") not in ("pending_decision", "pending_deep"):
-            await callback.answer("Уже обработано", show_alert=False)
             return
         await db.set_folder_status_by_id(reg_id, "pending_deep")
-        await callback.message.edit_text(
-            f"📂 <b>{row['title']}</b>\n✅ Добавлено в очередь — обработаю при следующем запуске"
-        )
-    await callback.answer()
+        try:
+            await callback.message.edit_text(
+                f"📂 <b>{row['title']}</b>\n✅ Добавлено в очередь — обработаю при следующем запуске"
+            )
+        except Exception as e:
+            logger.warning(f"callback_folder_deep edit_text failed: {e}")
 
 
 @router.callback_query(F.data.startswith("folder_summary:"))
 async def callback_folder_summary(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
+    await callback.answer()
     reg_id = int(callback.data.split(":")[1])
 
     async with Database(get_db_path(_config)) as db:
         row = await db.get_file_by_id(reg_id)
     if not row:
-        await callback.message.edit_text("⚠️ Запись не найдена")
-        await callback.answer()
+        try:
+            await callback.message.edit_text("⚠️ Запись не найдена")
+        except Exception:
+            pass
         return
     if row.get("status") == "folder_summary":
-        await callback.answer("Саммари уже создан", show_alert=False)
         return
 
-    await callback.message.edit_text("⏳ Создаю саммари...")
-    await callback.answer()
+    try:
+        await callback.message.edit_text("⏳ Создаю саммари...")
+    except Exception as e:
+        logger.warning(f"callback_folder_summary edit_text failed: {e}")
+        return
 
     try:
         import hashlib
@@ -340,29 +349,31 @@ def _blocking_create_summary(config: dict, folder_id: str, title: str, path: str
 async def callback_confirm_del(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
-
+    await callback.answer()
     deletion_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         result = await db.confirm_deletion(deletion_id)
-
-    if result:
-        await callback.message.edit_text(f"✅ Удаление подтверждено: {result.get('title')}")
-    else:
-        await callback.message.edit_text(f"⚠️ Запись #{deletion_id} не найдена")
-    await callback.answer()
+    try:
+        if result:
+            await callback.message.edit_text(f"✅ Удаление подтверждено: {result.get('title')}")
+        else:
+            await callback.message.edit_text(f"⚠️ Запись #{deletion_id} не найдена")
+    except Exception as e:
+        logger.warning(f"callback_confirm_del edit_text failed: {e}")
 
 
 @router.callback_query(F.data.startswith("cancel_del:"))
 async def callback_cancel_del(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
         return
-
+    await callback.answer()
     deletion_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         await db._conn.execute(
             "UPDATE pending_deletions SET status='cancelled' WHERE id=?", (deletion_id,)
         )
         await db._conn.commit()
-
-    await callback.message.edit_text(f"❌ Удаление #{deletion_id} отменено — элемент сохранён")
-    await callback.answer()
+    try:
+        await callback.message.edit_text(f"❌ Удаление #{deletion_id} отменено — элемент сохранён")
+    except Exception as e:
+        logger.warning(f"callback_cancel_del edit_text failed: {e}")

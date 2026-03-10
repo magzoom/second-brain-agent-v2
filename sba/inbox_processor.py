@@ -102,6 +102,10 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
         title = file_info.get("name", "Untitled")
         c_hash = metadata_hash(file_info)
 
+        # Skip internal SBA files (summaries created by the agent itself)
+        if title.startswith("_sba"):
+            continue
+
         reg_id, is_new = await db.upsert_file(
             source="gdrive", source_id=file_id,
             content_hash=c_hash, title=title,
@@ -164,6 +168,10 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
         file_id = file_info.get("id", "")
         title = file_info.get("name", "Untitled")
         c_hash = metadata_hash(file_info)
+
+        # Skip internal SBA files (summaries created by the agent itself)
+        if title.startswith("_sba"):
+            continue
 
         _, is_new = await db.upsert_file(
             source="gdrive", source_id=file_id,
