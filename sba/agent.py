@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from claude_agent_sdk import query, ClaudeAgentOptions, tool, create_sdk_mcp_server
-from claude_agent_sdk.types import AssistantMessage, TextBlock
+from claude_agent_sdk.types import AssistantMessage, TextBlock, ResultMessage
 
 from sba.db import Database
 from sba.notifier import Notifier
@@ -337,6 +337,8 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 - мусор → request_deletion
 - ЗАПРЕЩЕНО вызывать Research Agent для обработки входящих элементов — только для явных запросов пользователя типа "найди" или "изучи".
 
+ВАЖНО: Если в сообщении написано "он уже находится в организованной папке, НЕ перемещай его" — ТОЛЬКО вызови index_content. Никаких move_drive_file, никаких задач. Только индексация.
+
 При вопросе пользователя:
 - "что на сегодня" → get_reminders_today
 - "что на неделе" → get_reminders_upcoming
@@ -422,27 +424,64 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
     )
 
 
-async def run_main_agent(message: str, db: Database, notifier: Notifier, config: dict) -> str:
+async def run_main_agent(
+    message: str, db: Database, notifier: Notifier, config: dict,
+    _cost_accumulator: list | None = None,
+) -> str:
     """
     Run Main Agent for a single message. Returns agent's text response.
     Used by inbox/legacy processors and bot handlers.
+    _cost_accumulator: optional list to accumulate cost (append float).
     """
     setup(db, notifier, config)
     system_prompt = await _build_system_prompt()
     options = _build_options(system_prompt)
 
     result_text = ""
-    try:
-        async for msg in query(prompt=message, options=options):
-            if hasattr(msg, "result") and msg.result:
-                result_text = msg.result
-            elif isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, TextBlock) and block.text:
-                        result_text = block.text  # keep last text block as fallback
-    except Exception as e:
-        logger.error(f"Agent error: {e}", exc_info=True)
-        return f"Что-то пошло не так: {e}"
+    last_error: Exception | None = None
+    for attempt in range(2):  # 1 retry on failure
+        try:
+            async for msg in query(prompt=message, options=options):
+                if isinstance(msg, ResultMessage):
+                    cost = msg.total_cost_usd or 0.0
+                    turns = msg.num_turns
+                    usage = msg.usage or {}
+                    in_tok = usage.get("input_tokens", 0)
+                    out_tok = usage.get("output_tokens", 0)
+                    logger.info(
+                        f"Agent call: ${cost:.4f} | {turns} turns | "
+                        f"{in_tok} in / {out_tok} out tokens"
+                    )
+                    if _cost_accumulator is not None:
+                        _cost_accumulator.append(cost)
+                    # Detect billing errors and notify immediately
+                    if msg.is_error and msg.result and "Credit balance is too low" in msg.result:
+                        logger.error("Anthropic API: credit balance too low")
+                        await _notifier.send_message(
+                            "⛔ <b>Лимит расходов Anthropic исчерпан</b>\n\n"
+                            "API возвращает «Credit balance is too low».\n"
+                            "Возможные причины:\n"
+                            "• Закончился баланс на счёте\n"
+                            "• Достигнут месячный лимит расходов (Spend limit)\n\n"
+                            "Проверь: console.anthropic.com/billing\n"
+                            "Бот не будет отвечать до пополнения / повышения лимита."
+                        )
+                        return "⛔ Лимит расходов Anthropic исчерпан. Проверь console.anthropic.com/billing"
+                    if msg.result:
+                        result_text = msg.result
+                elif isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, TextBlock) and block.text:
+                            result_text = block.text  # keep last text block as fallback
+            last_error = None
+            break  # success
+        except Exception as e:
+            last_error = e
+            logger.error(f"Agent error (attempt {attempt + 1}): {e}", exc_info=True)
+            if attempt == 0:
+                await asyncio.sleep(5)
+    if last_error is not None:
+        return "Что-то пошло не так. Попробуй ещё раз."
 
     # After agent run: check for new pending deletions and notify via Telegram
     try:

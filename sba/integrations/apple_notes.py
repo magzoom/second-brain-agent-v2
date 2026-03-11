@@ -201,47 +201,28 @@ def move_note_to_folder(note_title: str, target_folder: str) -> bool:
 
 
 def move_note_by_id(note_id: str, target_folder: str) -> bool:
-    """Move a note to another folder by its stable JXA ID (x-coredata://...)."""
-    safe_id = note_id.replace("\\", "\\\\").replace('"', '\\"')
+    """Move a note to another folder by its stable JXA ID (x-coredata://...).
+    Uses AppleScript (not JXA) — JXA container= assignment fails with -10003 on macOS 26.
+    """
+    safe_id = _escape_applescript(note_id)
     safe_folder = _escape_applescript(target_folder)
 
-    jxa_script = f"""
-var app = Application("Notes");
-var targetFolderName = "{safe_folder}";
-var targetFolder = null;
-var folders = app.folders();
-for (var i = 0; i < folders.length; i++) {{
-    if (folders[i].name() === targetFolderName) {{
-        targetFolder = folders[i];
-        break;
-    }}
-}}
-if (!targetFolder) {{
-    targetFolder = app.make({{new: "folder", withProperties: {{name: targetFolderName}}}});
-}}
-var notes = app.notes();
-for (var i = 0; i < notes.length; i++) {{
-    if (notes[i].id() === "{safe_id}") {{
-        notes[i].container = targetFolder;
-        "ok";
-        break;
-    }}
-}}
-"not_found";
-"""
-    result = subprocess.run(
-        ["osascript", "-l", "JavaScript", "-e", jxa_script],
-        capture_output=True, text=True, timeout=60,
-    )
-    if result.returncode != 0:
-        logger.error(f"Failed to move note by id '{note_id}': {result.stderr.strip()}")
+    script = f"""
+    tell application "Notes"
+        if not (exists folder "{safe_folder}") then
+            make new folder with properties {{name:"{safe_folder}"}}
+        end if
+        set targetFolder to folder "{safe_folder}"
+        set matchedNote to note id "{safe_id}"
+        move matchedNote to targetFolder
+    end tell
+    """
+    result = _run_osascript(script)
+    if result["returncode"] != 0:
+        logger.error(f"Failed to move note by id '{note_id}': {result['stderr']}")
         return False
-    success = "ok" in result.stdout
-    if success:
-        logger.info(f"Moved note {note_id} → '{target_folder}'")
-    else:
-        logger.warning(f"Note {note_id} not found for move")
-    return success
+    logger.info(f"Moved note {note_id} → '{target_folder}'")
+    return True
 
 
 def delete_note_by_id(note_id: str) -> bool:

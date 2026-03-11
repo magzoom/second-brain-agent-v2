@@ -32,7 +32,6 @@ sba/
     keyboards.py    — inline keyboards: confirm_delete + folder_decision
   integrations/
     apple_notes.py
-    apple_calendar.py   ← не используется агентом, оставлен для совместимости
     google_drive.py
     google_tasks.py
     google_calendar.py
@@ -102,12 +101,28 @@ cd ~/Desktop/second-brain-agent-v2
 
 - AppleScript даты: property-based (`set year/month/day`), не строка
 - Apple Notes ID: `note.id()` из JXA (`x-coredata://...`) — стабильный
+- Apple Notes move: через AppleScript `move note to folder` (НЕ JXA `container=` — не работает на macOS 26, ошибка -10003)
 - `asyncio.to_thread()` для всех блокирующих Apple/Drive вызовов
 - Google Drive таймаут: `httplib2.Http(timeout=60)` в `get_file_content()`
 - fcntl lock: `LOCK_EX | LOCK_NB` — OS auto-release при краше
 - Goal Tracker: JXA batch reads → Haiku трансформирует → постит в канал
 - FTS5: `tokenize='unicode61'` для русского текста
 - Digest: MAX_POSTS=60, max_turns=15, parse_mode=HTML (не markdown); fallback отправляет msg.result если send_digest не был вызван; задачи показываются с due_date и ⚠️ если просрочены
+- Вложенный запуск из Claude Code: `CLAUDECODE=""` перед командой (иначе SDK падает с "nested session")
+
+## Контроль расходов (agent.py / inbox_processor.py)
+
+- `ResultMessage.total_cost_usd` — логируется после каждого вызова агента
+- `_cost_accumulator: list` — передаётся в `run_main_agent()`, суммируется за inbox-запуск
+- `inbox.max_items_per_run` (config.yaml, default: 20) — лимит вызовов за 2-часовой цикл
+- `inbox.max_session_cost_usd` (config.yaml, default: 0.50) — hard stop + уведомление в Telegram
+- При "Credit balance is too low" — агент шлёт уведомление в Telegram и возвращает понятное сообщение
+
+## Google Drive — inbox фильтр
+
+- `_process_gdrive()` обрабатывает ТОЛЬКО файлы с `inbox_folder_id` в parents (как v1)
+- Файлы вне Inbox папки игнорируются — обычная работа в Drive не триггерит агента
+- Причина бага (2026-03-11): Changes API возвращал ВСЕ изменения Drive → 219 файлов → 215 вызовов → $7.57 за ночь
 
 ## Связь с v1
 
