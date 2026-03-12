@@ -153,9 +153,9 @@ async def handle_text_input(message: Message) -> None:
 
         # Truncate if too long
         if len(result) > 4000:
-            result = result[:3900] + "\n\n_[сообщение обрезано, запроси детали отдельно]_"
+            result = result[:3900] + "\n\n[сообщение обрезано, запроси детали отдельно]"
 
-        await status_msg.edit_text(result)
+        await status_msg.edit_text(result, parse_mode=None)
 
         # Update history
         history.append(("user", text))
@@ -381,10 +381,7 @@ async def callback_cancel_del(callback: CallbackQuery) -> None:
         pass
     deletion_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
-        await db._conn.execute(
-            "UPDATE pending_deletions SET status='cancelled' WHERE id=?", (deletion_id,)
-        )
-        await db._conn.commit()
+        await db.cancel_deletion(deletion_id)
     try:
         await callback.message.edit_text(f"❌ Удаление #{deletion_id} отменено — элемент сохранён")
     except Exception as e:

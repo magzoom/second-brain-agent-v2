@@ -25,17 +25,17 @@ You (Telegram)  ──▶  Main Agent (Claude)
                     (knowledge base)
 ```
 
-**Every morning at 09:09** → Digest Agent sends a briefing:
+**Every morning at 09:00** → Digest Agent sends a briefing:
 - Tasks due today from Google Tasks
 - Top posts from your Telegram channels (via Telethon)
 - Categorized news: geopolitics, AI, local news, humor, health
 
-**Every 2 hours** → Inbox processor:
+**At 08:00, 12:00, 15:00, 18:00, 21:00** → Inbox processor:
 - Picks up new files from Google Drive Inbox
 - Picks up new notes from Apple Notes Inbox
 - Classifies each item: action / archive / delete
 
-**Every day at 09:00** → Legacy processor:
+**Every day at 09:10** → Legacy processor:
 - Walks Google Drive top-down, sends folder decision buttons to Telegram (📂 Deeper / 📝 Summary)
 - On "Summary": AI generates a markdown description from file names, saves `_sba_summary.md` in Drive, indexes in FTS5
 - On "Deeper": descends into subfolders on the next run (up to `legacy_folders_per_run` decisions per run)
@@ -68,7 +68,6 @@ By default the agent uses Google services (Tasks, Calendar, Drive). If you prefe
 
 | Google service | Apple alternative | Existing file |
 |---|---|---|
-| Google Tasks | Apple Reminders | `sba/integrations/apple_reminders.py` |
 | Google Calendar | Apple Calendar | `sba/integrations/apple_calendar.py` |
 | Google Drive | — | No native equivalent with a programmable API |
 
@@ -132,7 +131,7 @@ git clone https://github.com/magzoom/second-brain-agent-v2.git
 cd second-brain-agent-v2
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/pip install -e .
+.venv/bin/pip install .
 ```
 
 ### 2. Create config
@@ -248,7 +247,7 @@ Expected output:
 sba/
 ├── agent.py              # Main Agent — Claude SDK orchestrator
 ├── digest_agent.py       # Digest Agent — morning briefing
-├── inbox_processor.py    # Inbox daemon — processes new items every 2h
+├── inbox_processor.py    # Inbox daemon — runs at 08:00, 12:00, 15:00, 18:00, 21:00
 ├── legacy_processor.py   # Legacy daemon — indexes archive + Goal Tracker
 ├── lock.py               # Shared fcntl process lock
 ├── cli.py                # CLI entry point (Click)
@@ -292,7 +291,7 @@ sba/
 - Searches your personal knowledge base (FTS5)
 - Returns a synthesized answer
 
-**Digest Agent** (standalone, runs at 09:09):
+**Digest Agent** (standalone, runs at 09:00):
 - Gets tasks due today from Google Tasks
 - Reads last 24h posts from all your Telegram channels
 - Selects top items by category

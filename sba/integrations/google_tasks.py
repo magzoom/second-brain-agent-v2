@@ -82,9 +82,9 @@ def _get_or_create_list(service, name: str) -> str:
 
 
 def _to_rfc3339_utc(date_str: str, time_str: str = "09:00") -> str:
-    """Convert YYYY-MM-DD HH:MM to RFC 3339 UTC string."""
-    dt = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    """Convert YYYY-MM-DD HH:MM (local time) to RFC 3339 UTC string."""
+    dt_local = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M").astimezone()
+    return dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def create_task(
@@ -122,7 +122,7 @@ def create_task(
 
 def get_tasks_today(service) -> list[dict]:
     """Return incomplete tasks due today or overdue (all lists)."""
-    end_dt = datetime.now(timezone.utc).replace(hour=23, minute=59, second=59)
+    end_dt = datetime.now().replace(hour=23, minute=59, second=59).astimezone(timezone.utc)
     end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     result = service.tasklists().list(maxResults=100).execute()

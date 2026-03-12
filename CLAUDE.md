@@ -8,10 +8,10 @@
 - Research Agent — subagent внутри agent.py (AgentDefinition, WebSearch + FTS5)
 
 **4 демона (launchd):**
-- `com.sba.bot` — Telegram long polling, KeepAlive
-- `com.sba.inbox` — каждые 2 ч, Google Drive changes + Apple Notes Inbox
-- `com.sba.legacy` — 09:00, обработка накопленного + Goal Tracker
-- `com.sba.digest` — 09:09, утренний дайджест
+- `com.sba.bot` — Telegram long polling, KeepAlive + ThrottleInterval=30
+- `com.sba.inbox` — 5 запусков в день: **08:00, 12:00, 15:00, 18:00, 21:00** (StartCalendarInterval, не cron)
+- `com.sba.digest` — **09:00**, утренний брифинг (первым)
+- `com.sba.legacy` — **09:10**, обработка накопленного + Goal Tracker (10 мин после digest)
 
 ## Ключевые файлы
 
@@ -85,7 +85,7 @@ cd ~/Desktop/second-brain-agent-v2
 - Статусы папок (type='folder'): `pending_decision` → `pending_deep` | `folder_summary` | `folder_done`
 - `path_stack: list[str]` — хлебные крошки; путь хранится в поле `path` в БД, восстанавливается при `pending_deep`
 - `_sba_summary.md` создаётся в Drive через `create_summary_file()`, регистрируется как `processed` (inbox пропускает)
-- `decisions_counter: dict` — mutable счётчик через recursive calls; стоп при `>= legacy_folders_per_run`
+- `decisions_counter: dict` — mutable счётчик через recursive calls; ограничивает только новые решения (status=None); папки `pending_deep` рекурсируются без доп. проверки; файлы внутри папок лимитируются через `legacy.max_session_cost_usd`
 - `asyncio.to_thread(lambda: list(_list(service, folder_id, False)))` — generator→list in thread
 
 ## DB — методы для папок (db.py)
@@ -96,6 +96,14 @@ cd ~/Desktop/second-brain-agent-v2
 - `get_folders_by_status(status)` → `list`
 - `get_entry_type(source, source_id)` → `Optional[str]`
 - `upsert_file` — добавлен `entry_type: str = "file"`, UPDATE ветка включает `type=?`
+
+## DB — методы для pending_deletions (db.py)
+
+- `get_confirmed_deletions()` → `list` — элементы со статусом `confirmed`, ещё не удалённые
+- `cancel_deletion(deletion_id)` — ставит статус `cancelled`
+- `get_stale_pending_deletions(hours=20)` → `list` — просроченные `waiting` запросы
+- `update_stale_deletion_msg(deletion_id, new_msg_id)` — обновляет msg_id и сбрасывает `created_at`
+- Прямой доступ к `db._conn` вне `db.py` **запрещён** — все SQL-запросы только через методы класса
 
 ## Ключевые паттерны
 
@@ -110,12 +118,14 @@ cd ~/Desktop/second-brain-agent-v2
 - Digest: MAX_POSTS=60, max_turns=15, parse_mode=HTML (не markdown); fallback отправляет msg.result если send_digest не был вызван; задачи показываются с due_date и ⚠️ если просрочены
 - Вложенный запуск из Claude Code: `CLAUDECODE=""` перед командой (иначе SDK падает с "nested session")
 
-## Контроль расходов (agent.py / inbox_processor.py)
+## Контроль расходов (agent.py / inbox_processor.py / legacy_processor.py)
 
 - `ResultMessage.total_cost_usd` — логируется после каждого вызова агента
-- `_cost_accumulator: list` — передаётся в `run_main_agent()`, суммируется за inbox-запуск
-- `inbox.max_items_per_run` (config.yaml, default: 20) — лимит вызовов за 2-часовой цикл
-- `inbox.max_session_cost_usd` (config.yaml, default: 0.50) — hard stop + уведомление в Telegram
+- `_cost_accumulator: list` — передаётся в `run_main_agent()`, суммируется за запуск
+- `inbox.max_items_per_run` (config.yaml, default: 20) — лимит файлов за один запуск inbox
+- `inbox.max_session_cost_usd` (config.yaml) — hard stop inbox + уведомление в Telegram
+- `legacy.max_session_cost_usd` (config.yaml) — hard stop legacy + уведомление в Telegram
+- `timezone` (config.yaml, default: `"Asia/Almaty"`) — IANA timezone для Google Calendar событий; google_tasks.py использует системный timezone
 - При "Credit balance is too low" — агент шлёт уведомление в Telegram и возвращает понятное сообщение
 
 ## Google Drive — inbox фильтр

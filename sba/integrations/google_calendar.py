@@ -76,15 +76,16 @@ def create_event(
 
     end_dt = start_dt + timedelta(minutes=duration_minutes)
 
+    tz_name = config.get("timezone", "Asia/Almaty")
     event_body = {
         "summary": title,
         "start": {
             "dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-            "timeZone": "Asia/Almaty",
+            "timeZone": tz_name,
         },
         "end": {
             "dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-            "timeZone": "Asia/Almaty",
+            "timeZone": tz_name,
         },
     }
     if notes:

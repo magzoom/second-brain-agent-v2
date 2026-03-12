@@ -47,16 +47,13 @@ class Notifier:
     async def send_message(self, text: str) -> bool:
         return await self.send(text)
 
-    async def send_inbox_report(self, processed: int, actions_created: int, info_moved: int, errors: int = 0) -> None:
+    async def send_inbox_report(self, processed: int, errors: int = 0) -> None:
         if processed == 0 and errors == 0:
             return
+        parts = [f"✅ <b>Inbox обработан</b>\n📋 Обработано: {processed}"]
         if errors:
-            msg = (f"✅ <b>Inbox обработан</b>\n📋 Обработано: {processed}\n"
-                   f"✅ Задач создано: {actions_created}\n📁 В базу: {info_moved}\n❌ Ошибок: {errors}")
-        else:
-            msg = (f"✅ <b>Inbox обработан</b>\n📋 Обработано: {processed} · "
-                   f"Задач: {actions_created} · В базу: {info_moved}")
-        await self.send(msg)
+            parts.append(f"❌ Ошибок: {errors}")
+        await self.send("\n".join(parts))
 
     async def send_legacy_report(self, processed: int, actions_created: int, pending_deletions: int, errors: int = 0, folders_decided: int = 0) -> None:
         if processed == 0 and folders_decided == 0 and errors == 0:

@@ -307,7 +307,8 @@ class Database:
         if source:
             query += " AND source=?"
             params.append(source)
-        query += f" ORDER BY added_at ASC LIMIT {limit}"
+        query += " ORDER BY added_at ASC LIMIT ?"
+        params.append(limit)
         async with self._conn.execute(query, params) as cur:
             return await cur.fetchall()
 
@@ -391,6 +392,41 @@ class Database:
     async def mark_deletion_executed(self, deletion_id: int) -> None:
         await self._conn.execute(
             "UPDATE pending_deletions SET status='deleted' WHERE id=?", (deletion_id,)
+        )
+        await self._conn.commit()
+
+    async def get_confirmed_deletions(self) -> list:
+        """Return items confirmed for deletion but not yet executed."""
+        async with self._conn.execute(
+            """SELECT pd.id, pd.file_id, f.source, f.source_id, f.path, f.title
+               FROM pending_deletions pd
+               JOIN files_registry f ON f.id = pd.file_id
+               WHERE pd.status='confirmed'"""
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def cancel_deletion(self, deletion_id: int) -> None:
+        await self._conn.execute(
+            "UPDATE pending_deletions SET status='cancelled' WHERE id=?", (deletion_id,)
+        )
+        await self._conn.commit()
+
+    async def get_stale_pending_deletions(self, hours: int = 20) -> list:
+        """Return pending deletions older than N hours that are still waiting."""
+        async with self._conn.execute(
+            """SELECT pd.id, pd.telegram_msg_id, f.title, f.source
+               FROM pending_deletions pd
+               JOIN files_registry f ON f.id = pd.file_id
+               WHERE pd.status = 'waiting'
+                 AND pd.created_at < datetime('now', ? || ' hours')""",
+            (f"-{hours}",),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def update_stale_deletion_msg(self, deletion_id: int, new_msg_id: int) -> None:
+        await self._conn.execute(
+            "UPDATE pending_deletions SET telegram_msg_id=?, created_at=CURRENT_TIMESTAMP WHERE id=?",
+            (new_msg_id, deletion_id),
         )
         await self._conn.commit()
 
@@ -500,26 +536,6 @@ class Database:
             rows = await cur.fetchall()
         return {row["key"]: row["value"] for row in rows}
 
-    async def get_inbox_run_stats(self) -> dict:
-        """Count files processed in the last hour by classification."""
-        async with self._conn.execute(
-            """SELECT classification, COUNT(*) as cnt
-               FROM files_registry
-               WHERE status='processed'
-               AND processed_at >= datetime('now', '-1 hour')
-               GROUP BY classification"""
-        ) as cur:
-            rows = await cur.fetchall()
-        result = {"processed": 0, "actions": 0, "info": 0}
-        for row in rows:
-            c = row["classification"] or ""
-            cnt = row["cnt"]
-            result["processed"] += cnt
-            if c in ("action", "review"):
-                result["actions"] += cnt
-            elif c == "info":
-                result["info"] += cnt
-        return result
 
     async def set_deletion_telegram_msg(self, deletion_id: int, msg_id: int) -> None:
         await self._conn.execute(

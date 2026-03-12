@@ -17,6 +17,11 @@ from pathlib import Path
 from sba.db import Database, get_db_path
 from sba.lock import acquire_lock, release_lock
 from sba.notifier import Notifier
+from sba.integrations import apple_notes
+from sba.integrations.google_drive import (
+    build_service, get_changes, get_start_page_token,
+    list_folder_contents, get_file_content, metadata_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,29 +63,14 @@ async def run(config: dict) -> None:
             f"{len(cost_log)} agent calls | avg ${total_cost/len(cost_log):.4f}/call"
         )
 
-    # Read actual results from DB (agent updates files_registry directly)
-    async with Database(db_path) as db:
-        actual = await db.get_inbox_run_stats()
-
     await notifier.send_inbox_report(
-        processed=actual.get("processed", stats["processed"]),
-        actions_created=actual.get("actions", 0),
-        info_moved=actual.get("info", 0),
+        processed=stats["processed"],
         errors=stats["errors"],
     )
 
 
 async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats: dict) -> None:
     """Process new Google Drive files via incremental changes API."""
-    try:
-        from sba.integrations.google_drive import (
-            build_service, get_changes, get_start_page_token,
-            get_file_content, metadata_hash,
-        )
-    except ImportError:
-        logger.warning("Google Drive integration unavailable")
-        return
-
     try:
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
@@ -98,8 +88,13 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
     try:
         changes, new_token = await asyncio.to_thread(get_changes, service, page_token)
     except Exception as e:
-        logger.error(f"Failed to get Drive changes: {e}")
-        stats["errors"] += 1
+        error_str = str(e)
+        if "410" in error_str or "Gone" in error_str:
+            logger.warning("Google Drive page_token expired (HTTP 410), resetting for next run")
+            await db.set_gdrive_page_token(None)
+        else:
+            logger.error(f"Failed to get Drive changes: {e}")
+            stats["errors"] += 1
         return
 
     inbox_folder_id = config.get("google_drive", {}).get("inbox_folder_id", "")
@@ -162,13 +157,6 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
         return
 
     try:
-        from sba.integrations.google_drive import (
-            build_service, list_folder_contents, get_file_content, metadata_hash,
-        )
-    except ImportError:
-        return
-
-    try:
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
         logger.error(f"Google Drive auth failed (inbox folder scan): {e}")
@@ -225,8 +213,6 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
 
 async def _process_apple_notes(db: Database, notifier: Notifier, config: dict, stats: dict) -> None:
     """Process new notes in Apple Notes Inbox folder."""
-    from sba.integrations import apple_notes
-
     try:
         notes = await asyncio.to_thread(apple_notes.get_notes_in_folder, "Inbox")
     except Exception as e:

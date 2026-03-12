@@ -18,6 +18,10 @@ from pathlib import Path
 from sba.db import Database, get_db_path
 from sba.lock import acquire_lock, release_lock
 from sba.notifier import Notifier
+from sba.integrations import apple_notes, google_tasks
+from sba.integrations.google_drive import (
+    build_service, trash_file, list_folder_contents, get_file_content, metadata_hash,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +41,8 @@ async def run(config: dict) -> None:
     limit_drive = int(schedule.get("legacy_limit_drive", 3))
     limit_notes = int(schedule.get("legacy_limit_notes", 3))
 
-    stats = {"processed": 0, "actions": 0, "deletions": 0, "errors": 0, "folders_decided": 0}
+    cost_log: list = []
+    stats = {"processed": 0, "actions": 0, "deletions": 0, "errors": 0, "folders_decided": 0, "cost_log": cost_log}
 
     try:
         async with Database(db_path) as db:
@@ -54,6 +59,13 @@ async def run(config: dict) -> None:
         raise
     finally:
         release_lock(lock_fd)
+
+    total_cost = sum(cost_log)
+    if cost_log:
+        logger.info(
+            f"Legacy run cost: ${total_cost:.4f} total | "
+            f"{len(cost_log)} agent calls | avg ${total_cost/len(cost_log):.4f}/call"
+        )
 
     await notifier.send_legacy_report(
         processed=stats["processed"],
@@ -83,7 +95,6 @@ def _backup_db(db_path: Path) -> None:
 async def _rollover_overdue_tasks(config: dict) -> None:
     """Move overdue incomplete Google Tasks to today."""
     try:
-        from sba.integrations import google_tasks
         service = await asyncio.to_thread(google_tasks.build_service, config)
         count = await asyncio.to_thread(google_tasks.rollover_overdue_tasks, service)
         if count:
@@ -94,14 +105,7 @@ async def _rollover_overdue_tasks(config: dict) -> None:
 
 async def _resend_stale_pending_deletions(db: Database, notifier: Notifier) -> None:
     """Re-send pending deletion requests older than 20 hours that are still waiting."""
-    async with db._conn.execute(
-        """SELECT pd.id, pd.telegram_msg_id, f.title, f.source
-           FROM pending_deletions pd
-           JOIN files_registry f ON f.id = pd.file_id
-           WHERE pd.status = 'waiting'
-             AND pd.created_at < datetime('now', '-20 hours')"""
-    ) as cur:
-        stale = [dict(r) for r in await cur.fetchall()]
+    stale = await db.get_stale_pending_deletions(hours=20)
 
     for item in stale:
         del_id = item["id"]
@@ -119,23 +123,13 @@ async def _resend_stale_pending_deletions(db: Database, notifier: Notifier) -> N
         # Send fresh request
         new_msg_id = await notifier.send_deletion_request(del_id, title, source)
         if new_msg_id:
-            await db._conn.execute(
-                "UPDATE pending_deletions SET telegram_msg_id=?, created_at=CURRENT_TIMESTAMP WHERE id=?",
-                (new_msg_id, del_id),
-            )
-            await db._conn.commit()
+            await db.update_stale_deletion_msg(del_id, new_msg_id)
             logger.info(f"Re-sent stale deletion request #{del_id} '{title}' → msg_id={new_msg_id}")
 
 
 async def _execute_confirmed_deletions(db: Database, config: dict) -> None:
     """Execute physical deletion for items user confirmed via Telegram."""
-    async with db._conn.execute(
-        """SELECT pd.id, pd.file_id, f.source, f.source_id, f.path, f.title
-           FROM pending_deletions pd
-           JOIN files_registry f ON f.id = pd.file_id
-           WHERE pd.status='confirmed'"""
-    ) as cur:
-        confirmed = await cur.fetchall()
+    confirmed = await db.get_confirmed_deletions()
 
     for item in confirmed:
         item = dict(item)
@@ -153,7 +147,6 @@ async def _delete_item(item: dict, config: dict) -> bool:
 
     if source == "gdrive":
         try:
-            from sba.integrations.google_drive import build_service, trash_file
             service = await asyncio.to_thread(build_service, config)
             return await asyncio.to_thread(trash_file, service, source_id)
         except Exception as e:
@@ -161,15 +154,13 @@ async def _delete_item(item: dict, config: dict) -> bool:
             return False
 
     elif source == "apple_notes":
-        from sba.integrations.apple_notes import delete_note_by_id
-        return await asyncio.to_thread(delete_note_by_id, source_id)
+        return await asyncio.to_thread(apple_notes.delete_note_by_id, source_id)
 
     return False
 
 
 async def _goal_tracker(db: Database, notifier: Notifier, config: dict) -> None:
     """Post completed tasks from last 3 days to Goal Tracker Diary channel."""
-    from sba.integrations import google_tasks
     import anthropic
 
     channel_id = config.get("goal_tracker", {}).get("channel_id")
@@ -275,13 +266,6 @@ async def _process_gdrive_legacy(
     2. Sends Telegram decisions (limit: legacy_folders_per_run per run)
     3. Processes files directly in entered folders (no limit)
     """
-    try:
-        from sba.integrations.google_drive import (
-            build_service, list_folder_contents, get_file_content, metadata_hash,
-        )
-    except ImportError:
-        return
-
     try:
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
@@ -481,16 +465,19 @@ async def _process_apple_notes_legacy(
     """Process Apple Notes not yet in files_registry (excluding Inbox).
     Uses incremental tracking — reads only notes modified since last run.
     """
-    from sba.integrations import apple_notes
     import time as _time
 
     # Incremental: read only notes modified since last run
     last_run_ms_str = await db.get_pattern("legacy_notes_last_run_ms")
-    since_ms = int(last_run_ms_str) if last_run_ms_str else 0
+    try:
+        since_ms = int(last_run_ms_str) if last_run_ms_str else 0
+    except ValueError:
+        logger.warning(f"Invalid legacy_notes_last_run_ms value: {last_run_ms_str!r}, resetting to 0")
+        since_ms = 0
 
     logger.info(f"Reading Apple Notes modified since {since_ms} (incremental)...")
+    now_ms = int(_time.time() * 1000)  # capture before query to avoid missing notes modified during query
     all_notes = await asyncio.to_thread(apple_notes.get_notes_modified_since, since_ms, 500)
-    now_ms = int(_time.time() * 1000)
 
     processed = 0
 
@@ -499,7 +486,7 @@ async def _process_apple_notes_legacy(
             break
 
         folder = note.get("folder", "")
-        if folder == "Inbox":
+        if not folder or folder == "Inbox":
             continue
 
         note_id = str(note.get("id", ""))
@@ -532,6 +519,21 @@ async def _run_agent_on_legacy_item(
     """Send a single legacy item to Main Agent."""
     from sba import agent as main_agent
 
+    # Hard cost limit check (same as inbox)
+    cost_log: list = stats.get("cost_log", [])
+    current_cost = sum(cost_log)
+    limit = config.get("legacy", {}).get("max_session_cost_usd", 0.0)
+    if limit and current_cost >= limit:
+        if not stats.get("cost_limit_notified"):
+            stats["cost_limit_notified"] = True
+            logger.warning(f"Legacy: cost limit ${limit:.2f} reached (spent ${current_cost:.4f}), stopping")
+            await notifier.send_message(
+                f"⛔ <b>Legacy: лимит расходов (${limit:.2f}) исчерпан</b>\n\n"
+                f"Потрачено: ${current_cost:.4f} за {len(cost_log)} вызовов.\n"
+                f"Чтобы изменить лимит: <code>legacy.max_session_cost_usd</code> в config.yaml"
+            )
+        return
+
     message = (
         f"Обработай входящий элемент.\n"
         f"Источник: {source}\nID: {source_id}\n"
@@ -539,7 +541,8 @@ async def _run_agent_on_legacy_item(
     )
 
     try:
-        await main_agent.run_main_agent(message, db=db, notifier=notifier, config=config)
+        await main_agent.run_main_agent(message, db=db, notifier=notifier, config=config,
+                                        _cost_accumulator=cost_log)
         stats["processed"] += 1
     except Exception as e:
         logger.error(f"Agent failed for '{title}': {e}")
