@@ -37,7 +37,7 @@ async def run(config: dict) -> None:
     limit_drive = int(schedule.get("legacy_limit_drive", 3))
     limit_notes = int(schedule.get("legacy_limit_notes", 3))
 
-    stats = {"processed": 0, "actions": 0, "deletions": 0, "errors": 0}
+    stats = {"processed": 0, "actions": 0, "deletions": 0, "errors": 0, "folders_decided": 0}
 
     try:
         async with Database(db_path) as db:
@@ -59,6 +59,7 @@ async def run(config: dict) -> None:
         actions_created=stats["actions"],
         pending_deletions=stats["deletions"],
         errors=stats["errors"],
+        folders_decided=stats["folders_decided"],
     )
 
 
@@ -318,6 +319,7 @@ async def _scan_folder(
                 _list=_list,
             )
             decisions_counter["n"] += 1
+            stats["folders_decided"] = stats.get("folders_decided", 0) + 1
 
         elif status == "pending_deep":
             # Recurse — user already said "go deeper"

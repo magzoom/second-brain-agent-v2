@@ -58,14 +58,22 @@ class Notifier:
                    f"Задач: {actions_created} · В базу: {info_moved}")
         await self.send(msg)
 
-    async def send_legacy_report(self, processed: int, actions_created: int, pending_deletions: int, errors: int = 0) -> None:
-        if processed == 0 and errors == 0:
+    async def send_legacy_report(self, processed: int, actions_created: int, pending_deletions: int, errors: int = 0, folders_decided: int = 0) -> None:
+        if processed == 0 and folders_decided == 0 and errors == 0:
             msg = "🏁 <b>Legacy: новых элементов нет</b>"
         else:
-            msg = (f"🗂 <b>Legacy обработан</b>\n📋 Обработано: {processed}\n"
-                   f"✅ Задач: {actions_created}\n🗑 Ожидают удаления: {pending_deletions}")
+            parts = ["🗂 <b>Legacy обработан</b>"]
+            if folders_decided:
+                parts.append(f"📂 Папок на решение: {folders_decided}")
+            if processed:
+                parts.append(f"📋 Файлов обработано: {processed}")
+            if actions_created:
+                parts.append(f"✅ Задач создано: {actions_created}")
+            if pending_deletions:
+                parts.append(f"🗑 Ожидают удаления: {pending_deletions}")
             if errors:
-                msg += f"\n❌ Ошибок: {errors}"
+                parts.append(f"❌ Ошибок: {errors}")
+            msg = "\n".join(parts)
         await self.send(msg)
 
     async def send_error(self, error_msg: str, module: str = "SBA") -> None:

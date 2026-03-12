@@ -3,9 +3,9 @@ launchd daemon manager for SBA 2.0.
 
 Daemons:
   bot     — Telegram bot, KeepAlive + ThrottleInterval=30, runs forever
-  inbox   — Every 2 h (StartInterval 7200)
-  legacy  — Daily at 09:00 (StartCalendarInterval)
-  digest  — Daily at 09:09 (StartCalendarInterval)
+  inbox   — Daily at 08:00, 12:00, 15:00, 18:00, 21:00 (StartCalendarInterval)
+  digest  — Daily at 09:00 (StartCalendarInterval)
+  legacy  — Daily at 09:10 (StartCalendarInterval)
 
 Labels match v1 (com.sba.*) so installing v2 replaces v1 plists.
 Bot label is com.sba.bot (v1 used com.sba.telegram-bot — handled explicitly).
@@ -100,8 +100,14 @@ def _inbox_plist() -> str:
     <string>{exe}</string>
     <string>inbox</string>
   </array>
-  <key>StartInterval</key>
-  <integer>7200</integer>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
   <key>RunAtLoad</key>
   <false/>
   <key>StandardOutPath</key>
@@ -139,7 +145,7 @@ def _legacy_plist() -> str:
     <key>Hour</key>
     <integer>9</integer>
     <key>Minute</key>
-    <integer>0</integer>
+    <integer>10</integer>
   </dict>
   <key>RunAtLoad</key>
   <false/>
@@ -178,7 +184,7 @@ def _digest_plist() -> str:
     <key>Hour</key>
     <integer>9</integer>
     <key>Minute</key>
-    <integer>9</integer>
+    <integer>0</integer>
   </dict>
   <key>RunAtLoad</key>
   <false/>
