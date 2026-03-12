@@ -230,9 +230,12 @@ async def _goal_tracker(db: Database, notifier: Notifier, config: dict) -> None:
     # Post to channel
     ok = await notifier.post_to_goal_tracker_channel(transformed_entries, channel_id)
     if ok:
-        for title, list_name, task_id in new_entries:
+        # Mark only the entries that were actually posted (transformed_entries may be
+        # shorter than new_entries if Claude's output was truncated — preserve order)
+        posted_count = len(transformed_entries)
+        for title, list_name, task_id in new_entries[:posted_count]:
             await db.add_goal_tracker_post(title, list_name, task_id)
-        logger.info(f"Goal Tracker: posted {len(new_entries)} achievements")
+        logger.info(f"Goal Tracker: posted {posted_count} achievements")
 
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -275,7 +278,7 @@ async def _process_gdrive_legacy(
     folders_per_run = int(config.get("schedule", {}).get("legacy_folders_per_run", 5))
     decisions_counter = {"n": 0}
 
-    # Collect "entered" folders: category roots + pending_deep
+    # Collect category roots as entry points — DFS will recurse into pending_deep naturally
     entered: list[tuple[str, list[str]]] = []
 
     categories = config.get("categories", [])
@@ -286,12 +289,8 @@ async def _process_gdrive_legacy(
             entered.append((folder_id, [folder_name]))
         else:
             logger.warning(f"No folder_id for '{folder_name}' (key: {config_key})")
-
-    # Add pending_deep folders (user said "go deeper" in previous runs)
-    for row in await db.get_folders_by_status("pending_deep"):
-        breadcrumb = row["path"] or row["title"]
-        path_stack = [p.strip() for p in breadcrumb.split(" / ")] if " / " in breadcrumb else [breadcrumb]
-        entered.append((row["source_id"], path_stack))
+    # Note: pending_deep folders are NOT added separately — _scan_folder recurses into them
+    # automatically when encountered during DFS from category roots, avoiding duplicate API calls.
 
     for folder_id, path_stack in entered:
         if decisions_counter["n"] >= folders_per_run:
@@ -323,8 +322,6 @@ async def _scan_folder(
 
     # ── Subfolders: send decision or recurse into pending_deep ──────────────
     for subfolder in subfolders:
-        if decisions_counter["n"] >= folders_per_run:
-            break
         sub_id = subfolder.get("id", "")
         sub_title = subfolder.get("name", "")
         sub_path = " / ".join(path_stack + [sub_title])
@@ -332,16 +329,18 @@ async def _scan_folder(
         status = await db.get_folder_status("gdrive", sub_id)
 
         if status is None:
-            await _send_folder_decision(
-                service=service, db=db, notifier=notifier, config=config,
-                folder_item=subfolder, path_stack=path_stack, sub_path=sub_path,
-                _list=_list,
-            )
-            decisions_counter["n"] += 1
-            stats["folders_decided"] = stats.get("folders_decided", 0) + 1
+            if decisions_counter["n"] < folders_per_run:
+                await _send_folder_decision(
+                    service=service, db=db, notifier=notifier, config=config,
+                    folder_item=subfolder, path_stack=path_stack, sub_path=sub_path,
+                    _list=_list,
+                )
+                decisions_counter["n"] += 1
+                stats["folders_decided"] = stats.get("folders_decided", 0) + 1
+            # else: limit reached — skip new decisions but keep iterating (don't break)
 
         elif status == "pending_deep":
-            # Recurse — user already said "go deeper"
+            # Always recurse regardless of decisions counter — user already decided
             await _scan_folder(
                 service=service, db=db, notifier=notifier, config=config,
                 folder_id=sub_id, path_stack=path_stack + [sub_title],

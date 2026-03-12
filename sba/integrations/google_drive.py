@@ -214,7 +214,7 @@ def upload_file(
 
 
 def trash_file(service, file_id: str) -> bool:
-    """Move a file to trash (reversible deletion)."""
+    """Move a file to trash (reversible deletion). Returns True if trashed or already gone."""
     try:
         service.files().update(
             fileId=file_id,
@@ -223,6 +223,9 @@ def trash_file(service, file_id: str) -> bool:
         logger.info(f"Trashed Drive file: {file_id}")
         return True
     except HttpError as e:
+        if e.resp.status in (404, 410):
+            logger.info(f"Drive file {file_id} already deleted (HTTP {e.resp.status})")
+            return True  # goal achieved — file is gone
         logger.error(f"Failed to trash file {file_id}: {e}")
         return False
 

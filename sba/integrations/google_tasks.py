@@ -70,6 +70,22 @@ def build_service(config: dict):
     return build("tasks", "v1", credentials=creds)
 
 
+def _fetch_all_tasks(service, **kwargs) -> list:
+    """Fetch all tasks from one list, handling nextPageToken pagination."""
+    items = []
+    page_token = None
+    while True:
+        req = dict(kwargs)
+        if page_token:
+            req["pageToken"] = page_token
+        result = service.tasks().list(**req).execute()
+        items.extend(result.get("items", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+    return items
+
+
 def _get_or_create_list(service, name: str) -> str:
     """Get task list ID by name, creating it if missing."""
     result = service.tasklists().list(maxResults=100).execute()
@@ -129,14 +145,14 @@ def get_tasks_today(service) -> list[dict]:
     items = []
     for tl in result.get("items", []):
         try:
-            tasks_result = service.tasks().list(
+            for t in _fetch_all_tasks(
+                service,
                 tasklist=tl["id"],
                 dueMax=end_str,
                 showCompleted=False,
                 showHidden=False,
                 maxResults=100,
-            ).execute()
-            for t in tasks_result.get("items", []):
+            ):
                 if t.get("status") == "needsAction":
                     items.append({
                         "title": t["title"],
@@ -157,14 +173,14 @@ def get_tasks_upcoming(service, days: int = 7) -> list[dict]:
     items = []
     for tl in result.get("items", []):
         try:
-            tasks_result = service.tasks().list(
+            for t in _fetch_all_tasks(
+                service,
                 tasklist=tl["id"],
                 dueMax=end_str,
                 showCompleted=False,
                 showHidden=False,
                 maxResults=100,
-            ).execute()
-            for t in tasks_result.get("items", []):
+            ):
                 if t.get("status") == "needsAction":
                     items.append({
                         "title": t["title"],
@@ -188,14 +204,14 @@ def rollover_overdue_tasks(service) -> int:
     updated = 0
     for tl in result.get("items", []):
         try:
-            tasks_result = service.tasks().list(
+            for t in _fetch_all_tasks(
+                service,
                 tasklist=tl["id"],
                 dueMax=cutoff,
                 showCompleted=False,
                 showHidden=False,
                 maxResults=100,
-            ).execute()
-            for t in tasks_result.get("items", []):
+            ):
                 if t.get("status") == "needsAction" and t.get("due"):
                     service.tasks().patch(
                         tasklist=tl["id"],
@@ -219,14 +235,14 @@ def get_completed_with_list(service, days: int = 3) -> list[tuple[str, str, str]
         if tl["title"] not in CATEGORY_LISTS:
             continue
         try:
-            tasks_result = service.tasks().list(
+            for t in _fetch_all_tasks(
+                service,
                 tasklist=tl["id"],
                 showCompleted=True,
                 showHidden=True,
                 completedMin=cutoff_str,
                 maxResults=100,
-            ).execute()
-            for t in tasks_result.get("items", []):
+            ):
                 if t.get("status") == "completed":
                     completed.append((t["title"], tl["title"], t["id"]))
         except Exception:

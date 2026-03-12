@@ -248,11 +248,12 @@ for (var i = 0; i < notes.length; i++) {{
         logger.error(f"Failed to delete note by id '{note_id}': {result.stderr.strip()}")
         return False
     success = "ok" in result.stdout
+    not_found = not success and "not_found" in result.stdout
     if success:
         logger.info(f"Deleted note {note_id}")
-    else:
-        logger.warning(f"Note {note_id} not found for deletion")
-    return success
+    elif not_found:
+        logger.info(f"Note {note_id} already deleted (not found)")
+    return success or not_found  # both mean goal achieved — note is gone
 
 
 def list_folders() -> list[str]:
