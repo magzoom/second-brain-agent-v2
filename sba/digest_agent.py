@@ -50,13 +50,13 @@ def _md_to_html(text: str) -> str:
 @tool("get_telegram_channel_posts", "Получить посты из Telegram каналов за последние N часов.", {
     "type": "object",
     "properties": {
-        "hours_back": {"type": "integer", "description": "Часов назад", "default": 24},
+        "hours_back": {"type": "integer", "description": "Часов назад", "default": 12},
     },
     "required": [],
 })
 async def _get_telegram_channel_posts_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Fetch posts from all subscribed Telegram channels via Telethon."""
-    hours_back = int(args.get("hours_back", 24))
+    hours_back = int(args.get("hours_back", 12))
     try:
         from telethon import TelegramClient
         session_path = str(Path.home() / ".sba" / "telegram_userbot")
@@ -160,7 +160,7 @@ DIGEST_SYSTEM_PROMPT = """Ты создаёшь утренний дайджес�
 
 Порядок действий:
 1. Вызови get_todays_reminders_and_events → задачи и события на сегодня
-2. Вызови get_telegram_channel_posts → посты из каналов за 24ч
+2. Вызови get_telegram_channel_posts → посты из каналов за 12ч
 3. Отбери лучшее по категориям:
    🌍 Геополитика (2 события), 🤖 ИИ/Технологии (2), 🇰🇿 Казахстан (2),
    📱 Гаджеты (1), 😄 Юмор (1 анекдот), 💪 Здоровье (1 факт/совет), 🕌 Духовное (хадис или аят)

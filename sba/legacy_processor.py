@@ -4,7 +4,7 @@ Legacy Processor — runs daily at 09:00 via launchd.
 Steps per run:
 1. Execute confirmed deletions (status='confirmed' in pending_deletions)
 2. Goal Tracker: post completed tasks to Telegram channel
-3. Process Google Drive legacy files (limit_drive per run)
+3. Scan Google Drive folders — send Telegram decisions for new/pending_deep folders
 4. Process Apple Notes legacy (limit_notes per run)
 
 Uses fcntl-based lock (OS auto-releases on crash).
@@ -20,7 +20,7 @@ from sba.lock import acquire_lock, release_lock
 from sba.notifier import Notifier
 from sba.integrations import apple_notes, google_tasks
 from sba.integrations.google_drive import (
-    build_service, trash_file, list_folder_contents, get_file_content, metadata_hash,
+    build_service, trash_file, list_folder_contents,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,6 @@ async def run(config: dict) -> None:
     _backup_db(db_path)
 
     schedule = config.get("schedule", {})
-    limit_drive = int(schedule.get("legacy_limit_drive", 3))
     limit_notes = int(schedule.get("legacy_limit_notes", 3))
 
     cost_log: list = []
@@ -50,7 +49,7 @@ async def run(config: dict) -> None:
             await _resend_stale_pending_deletions(db, notifier)
             await _rollover_overdue_tasks(config)
             await _goal_tracker(db, notifier, config)
-            await _process_gdrive_legacy(db, notifier, config, stats, limit_drive)
+            await _process_gdrive_legacy(db, notifier, config, stats)
             await _process_apple_notes_legacy(db, notifier, config, stats, limit_notes)
 
     except Exception as e:
@@ -257,14 +256,14 @@ def _is_binary(mime: str) -> bool:
 
 
 async def _process_gdrive_legacy(
-    db: Database, notifier: Notifier, config: dict, stats: dict, limit: int
+    db: Database, notifier: Notifier, config: dict, stats: dict
 ) -> None:
     """Process Google Drive category folders using hierarchical indexing strategy.
 
     Each run:
     1. Scans category folders and pending_deep folders for unclassified subfolders
-    2. Sends Telegram decisions (limit: legacy_folders_per_run per run)
-    3. Processes files directly in entered folders (no limit)
+    2. Sends Telegram decisions for new folders (limit: legacy_folders_per_run per run)
+    Files inside folders are NOT processed by legacy — use inbox for file indexing.
     """
     try:
         service = await asyncio.to_thread(build_service, config)
@@ -303,7 +302,7 @@ async def _process_gdrive_legacy(
                 folder_id=folder_id, path_stack=path_stack,
                 decisions_counter=decisions_counter, folders_per_run=folders_per_run,
                 stats=stats,
-                _list=list_folder_contents, _get=get_file_content, _hash=metadata_hash,
+                _list=list_folder_contents,
             )
         except Exception as e:
             logger.error(f"Error scanning folder '{' / '.join(path_stack)}': {e}")
@@ -314,9 +313,9 @@ async def _scan_folder(
     service, db: Database, notifier: Notifier, config: dict,
     folder_id: str, path_stack: list[str],
     decisions_counter: dict, folders_per_run: int,
-    stats: dict, _list, _get, _hash,
+    stats: dict, _list,
 ) -> None:
-    """Scan one folder: send decisions for unclassified subfolders, process files directly."""
+    """Scan one folder: send decisions for unclassified subfolders. Files are not processed."""
     items = await asyncio.to_thread(lambda: list(_list(service, folder_id, False)))
 
     subfolders = [i for i in items if i.get("mimeType") == FOLDER_MIME]
@@ -347,27 +346,16 @@ async def _scan_folder(
                 service=service, db=db, notifier=notifier, config=config,
                 folder_id=sub_id, path_stack=path_stack + [sub_title],
                 decisions_counter=decisions_counter, folders_per_run=folders_per_run,
-                stats=stats, _list=_list, _get=_get, _hash=_hash,
+                stats=stats, _list=_list,
             )
         # pending_decision / folder_summary / folder_done / folder_partial → skip
 
-    # ── Files: notify about media, process text files ───────────────────────
+    # ── Media: notify only (no AI processing of files in legacy) ────────────
     media_files = [f for f in files if _is_media(f.get("mimeType", ""))]
-    text_files = [
-        f for f in files
-        if not _is_media(f.get("mimeType", "")) and not _is_binary(f.get("mimeType", ""))
-    ]
-
     if media_files:
         await notifier.send_media_notification(
             path=" / ".join(path_stack),
             media_files=[f.get("name", "") for f in media_files],
-        )
-
-    for file_info in text_files:
-        await _process_gdrive_file(
-            file_info=file_info, service=service, db=db, notifier=notifier,
-            config=config, stats=stats, _get=_get, _hash=_hash,
         )
 
 
@@ -425,38 +413,6 @@ async def _send_folder_decision(
     )
     logger.info(f"Sent folder decision: {sub_path}")
 
-
-async def _process_gdrive_file(
-    file_info: dict, service, db: Database, notifier: Notifier, config: dict,
-    stats: dict, _get, _hash,
-) -> None:
-    """Process a single Drive file: upsert registry, read content, run agent."""
-    file_id = file_info.get("id", "")
-    mime = file_info.get("mimeType", "")
-    title = file_info.get("name", "Untitled")
-    c_hash = _hash(file_info)
-
-    _, is_new = await db.upsert_file(
-        source="gdrive", source_id=file_id,
-        content_hash=c_hash, title=title,
-        path=file_info.get("webViewLink", ""),
-    )
-    if not is_new:
-        return
-
-    content_text = ""
-    try:
-        content_bytes = await asyncio.to_thread(_get, service, file_id, mime)
-        if content_bytes:
-            content_text = content_bytes.decode("utf-8", errors="ignore")
-    except Exception:
-        pass
-
-    await _run_agent_on_legacy_item(
-        db=db, notifier=notifier, config=config,
-        source="gdrive", source_id=file_id,
-        title=title, content=content_text, stats=stats,
-    )
 
 
 async def _process_apple_notes_legacy(
