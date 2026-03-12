@@ -260,6 +260,13 @@ class Database:
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def get_file_status(self, reg_id: int) -> Optional[str]:
+        async with self._conn.execute(
+            "SELECT status FROM files_registry WHERE id=?", (reg_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return row["status"] if row else None
+
     async def get_folders_by_status(self, status: str) -> list:
         async with self._conn.execute(
             "SELECT * FROM files_registry WHERE type='folder' AND status=? ORDER BY added_at ASC",

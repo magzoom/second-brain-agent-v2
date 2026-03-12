@@ -123,7 +123,7 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
         if title.startswith("_sba"):
             continue
 
-        _, is_new = await db.upsert_file(
+        reg_id, is_new = await db.upsert_file(
             source="gdrive", source_id=file_id,
             content_hash=c_hash, title=title,
             path=file_info.get("webViewLink", ""),
@@ -147,7 +147,7 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
             db=db, notifier=notifier, config=config,
             source="gdrive", source_id=file_id,
             title=title, content=content_text, stats=stats,
-            from_inbox=True,
+            from_inbox=True, reg_id=reg_id,
         )
 
     # Save token AFTER processing — if we crash mid-loop, we'll re-process on next run (safe)
@@ -199,7 +199,7 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
         if title.startswith("_sba"):
             continue
 
-        _, is_new = await db.upsert_file(
+        reg_id, is_new = await db.upsert_file(
             source="gdrive", source_id=file_id,
             content_hash=c_hash, title=title,
             path=file_info.get("webViewLink", ""),
@@ -219,6 +219,7 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
             db=db, notifier=notifier, config=config,
             source="gdrive", source_id=file_id,
             title=title, content=content_text, stats=stats,
+            reg_id=reg_id,
         )
 
 
@@ -248,19 +249,24 @@ async def _process_apple_notes(db: Database, notifier: Notifier, config: dict, s
             content_hash=c_hash, title=title,
         )
         if not is_new:
-            continue
+            # Still in Inbox — check if previously failed (not yet 'processed')
+            status = await db.get_file_status(reg_id)
+            if status == "processed":
+                continue
+            logger.info(f"Apple Notes: retrying stuck note '{title}' (status={status})")
 
         await _run_agent_on_item(
             db=db, notifier=notifier, config=config,
             source="apple_notes", source_id=note_id,
             title=title, content=content, stats=stats,
+            reg_id=reg_id,
         )
 
 
 async def _run_agent_on_item(
     db: Database, notifier: Notifier, config: dict,
     source: str, source_id: str, title: str, content: str, stats: dict,
-    from_inbox: bool = True,
+    from_inbox: bool = True, reg_id: int = None,
 ) -> None:
     """Send a single item to Main Agent for processing."""
     from sba import agent as main_agent
@@ -300,6 +306,8 @@ async def _run_agent_on_item(
             _cost_accumulator=cost_log,
         )
         stats["processed"] += 1
+        if reg_id:
+            await db.update_file_status(reg_id, "processed")
     except Exception as e:
         logger.error(f"Agent failed for '{title}': {e}")
         stats["errors"] += 1
