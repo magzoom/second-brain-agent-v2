@@ -98,6 +98,7 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
         return
 
     inbox_folder_id = config.get("google_drive", {}).get("inbox_folder_id", "")
+    limit_hit = False
 
     for file_info in changes:
         mime = file_info.get("mimeType", "")
@@ -126,6 +127,11 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
         if not is_new:
             continue
 
+        if stats["processed"] >= stats.get("max", 20):
+            limit_hit = True
+            logger.info(f"Inbox: reached max_items_per_run limit ({stats['max']}), not advancing page_token")
+            break
+
         content_text = ""
         try:
             content_bytes = await asyncio.to_thread(get_file_content, service, file_id, mime)
@@ -134,10 +140,6 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
         except Exception as e:
             logger.debug(f"Could not download content for '{title}' ({file_id}): {e}")
 
-        if stats["processed"] >= stats.get("max", 20):
-            logger.info(f"Inbox: reached max_items_per_run limit ({stats['max']}), stopping gdrive changes")
-            break
-
         await _run_agent_on_item(
             db=db, notifier=notifier, config=config,
             source="gdrive", source_id=file_id,
@@ -145,8 +147,10 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
             from_inbox=True, reg_id=reg_id,
         )
 
-    # Save token AFTER processing — if we crash mid-loop, we'll re-process on next run (safe)
-    await db.set_gdrive_page_token(new_token)
+    # Only advance token if we processed the whole batch.
+    # If limit was hit, keep old token so remaining files are fetched next run.
+    if not limit_hit:
+        await db.set_gdrive_page_token(new_token)
 
 
 async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config: dict, stats: dict) -> None:
@@ -235,9 +239,9 @@ async def _process_apple_notes(db: Database, notifier: Notifier, config: dict, s
             content_hash=c_hash, title=title,
         )
         if not is_new:
-            # Still in Inbox — check if previously failed (not yet 'processed')
+            # Still in Inbox — retry only if status is not terminal
             status = await db.get_file_status(reg_id)
-            if status == "processed":
+            if status in ("processed", "error"):
                 continue
             logger.info(f"Apple Notes: retrying stuck note '{title}' (status={status})")
 
@@ -297,3 +301,5 @@ async def _run_agent_on_item(
     except Exception as e:
         logger.error(f"Agent failed for '{title}': {e}")
         stats["errors"] += 1
+        if reg_id:
+            await db.update_file_status(reg_id, "error")  # prevent infinite retry

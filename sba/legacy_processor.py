@@ -436,9 +436,11 @@ async def _process_apple_notes_legacy(
     all_notes = await asyncio.to_thread(apple_notes.get_notes_modified_since, since_ms, 500)
 
     processed = 0
+    notes_exhausted = True  # will be set False if we hit the limit mid-loop
 
     for note in all_notes:
         if processed >= limit:
+            notes_exhausted = False
             break
 
         folder = note.get("folder", "")
@@ -464,8 +466,12 @@ async def _process_apple_notes_legacy(
         )
         processed += 1
 
-    # Save timestamp AFTER processing — if we crash mid-loop, next run re-reads modified notes
-    await db.set_pattern("legacy_notes_last_run_ms", str(now_ms))
+    # Only advance timestamp if we processed all notes — if limit was hit,
+    # keep old timestamp so remaining notes are picked up on the next run.
+    if notes_exhausted:
+        await db.set_pattern("legacy_notes_last_run_ms", str(now_ms))
+    else:
+        logger.info(f"Apple Notes: hit limit ({limit}), not advancing timestamp — {len(all_notes) - processed} notes remain")
 
 
 async def _run_agent_on_legacy_item(
