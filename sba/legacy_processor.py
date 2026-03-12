@@ -42,6 +42,7 @@ async def run(config: dict) -> None:
     try:
         async with Database(db_path) as db:
             await _execute_confirmed_deletions(db, config)
+            await _resend_stale_pending_deletions(db, notifier)
             await _rollover_overdue_tasks(config)
             await _goal_tracker(db, notifier, config)
             await _process_gdrive_legacy(db, notifier, config, stats, limit_drive)
@@ -89,6 +90,41 @@ async def _rollover_overdue_tasks(config: dict) -> None:
             logger.info(f"Rolled over {count} overdue tasks to today")
     except Exception as e:
         logger.warning(f"Task rollover failed: {e}")
+
+
+async def _resend_stale_pending_deletions(db: Database, notifier: Notifier) -> None:
+    """Re-send pending deletion requests older than 20 hours that are still waiting."""
+    async with db._conn.execute(
+        """SELECT pd.id, pd.telegram_msg_id, f.title, f.source
+           FROM pending_deletions pd
+           JOIN files_registry f ON f.id = pd.file_id
+           WHERE pd.status = 'waiting'
+             AND pd.created_at < datetime('now', '-20 hours')"""
+    ) as cur:
+        stale = [dict(r) for r in await cur.fetchall()]
+
+    for item in stale:
+        del_id = item["id"]
+        old_msg_id = item["telegram_msg_id"]
+        title = item["title"]
+        source = item["source"]
+
+        # Mark old message as outdated
+        if old_msg_id and notifier.enabled:
+            await notifier.edit_message(
+                old_msg_id,
+                f"⚠️ <b>Запрос устарел, повторно отправлен сегодня</b>\n📄 {title}",
+            )
+
+        # Send fresh request
+        new_msg_id = await notifier.send_deletion_request(del_id, title, source)
+        if new_msg_id:
+            await db._conn.execute(
+                "UPDATE pending_deletions SET telegram_msg_id=?, created_at=CURRENT_TIMESTAMP WHERE id=?",
+                (new_msg_id, del_id),
+            )
+            await db._conn.commit()
+            logger.info(f"Re-sent stale deletion request #{del_id} '{title}' → msg_id={new_msg_id}")
 
 
 async def _execute_confirmed_deletions(db: Database, config: dict) -> None:
