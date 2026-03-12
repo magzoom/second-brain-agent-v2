@@ -85,7 +85,8 @@ cd ~/Desktop/second-brain-agent-v2
 - Статусы папок (type='folder'): `pending_decision` → `pending_deep` | `folder_summary` | `folder_done`
 - `path_stack: list[str]` — хлебные крошки; путь хранится в поле `path` в БД, восстанавливается при `pending_deep`
 - `_sba_summary.md` создаётся в Drive через `create_summary_file()`, регистрируется как `processed` (inbox пропускает)
-- `decisions_counter: dict` — mutable счётчик через recursive calls; ограничивает только новые решения (status=None); папки `pending_deep` рекурсируются без доп. проверки; файлы внутри папок legacy НЕ обрабатывает (только медиа-уведомление)
+- `decisions_counter: dict` — ограничивает только новые решения (status=None); `pending_deep` рекурсируются ВСЕГДА (не прерывает итерацию); файлы внутри папок legacy НЕ обрабатывает (только медиа-уведомление)
+- Старт только из корневых категорий — `pending_deep` НЕ добавляются отдельно в start list (иначе двойное сканирование)
 - `asyncio.to_thread(lambda: list(_list(service, folder_id, False)))` — generator→list in thread
 
 ## DB — методы для папок (db.py)
