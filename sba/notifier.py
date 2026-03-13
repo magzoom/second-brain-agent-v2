@@ -56,22 +56,19 @@ class Notifier:
         await self.send("\n".join(parts))
 
     async def send_legacy_report(self, processed: int, actions_created: int, pending_deletions: int, errors: int = 0, folders_decided: int = 0) -> None:
-        if processed == 0 and folders_decided == 0 and errors == 0:
-            msg = "🏁 <b>Legacy: новых элементов нет</b>"
-        else:
-            parts = ["🗂 <b>Legacy обработан</b>"]
-            if folders_decided:
-                parts.append(f"📂 Папок на решение: {folders_decided}")
-            if processed:
-                parts.append(f"📋 Файлов обработано: {processed}")
-            if actions_created:
-                parts.append(f"✅ Задач создано: {actions_created}")
-            if pending_deletions:
-                parts.append(f"🗑 Ожидают удаления: {pending_deletions}")
-            if errors:
-                parts.append(f"❌ Ошибок: {errors}")
-            msg = "\n".join(parts)
-        await self.send(msg)
+        # Folder decision cards are already sent individually — no summary needed
+        if processed == 0 and errors == 0:
+            return
+        parts = ["🗂 <b>Legacy обработан</b>"]
+        if processed:
+            parts.append(f"📋 Файлов обработано: {processed}")
+        if actions_created:
+            parts.append(f"✅ Задач создано: {actions_created}")
+        if pending_deletions:
+            parts.append(f"🗑 Ожидают удаления: {pending_deletions}")
+        if errors:
+            parts.append(f"❌ Ошибок: {errors}")
+        await self.send("\n".join(parts))
 
     async def send_error(self, error_msg: str, module: str = "SBA") -> None:
         msg = f"❌ <b>Ошибка [{module}]</b>\n{error_msg}"
@@ -152,7 +149,7 @@ class Notifier:
             logger.error(f"send_folder_decision failed: {e}")
             return None
 
-    async def send_media_notification(self, path: str, media_files: list) -> None:
+    async def send_media_notification(self, path: str, media_files: list, reg_id: int = 0) -> None:
         """Notify about media files that may belong in Google Photos."""
         if not self._enabled or not media_files:
             return
@@ -161,7 +158,22 @@ class Notifier:
             names += f" и ещё {len(media_files) - 5}"
         text = (f"📷 <b>Медиафайлы</b>\nПуть: {path}\n"
                 f"{len(media_files)} файлов: {names}\n\nВозможно стоит перенести в Google Photos.")
-        await self.send(text)
+        if not reg_id:
+            await self.send(text)
+            return
+        inline_keyboard = {"inline_keyboard": [[
+            {"text": "✅ Ознакомлен", "callback_data": f"media_ack:{reg_id}"},
+        ]]}
+        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+        payload = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML", "reply_markup": inline_keyboard}
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    data = await resp.json()
+                    if not data.get("ok"):
+                        logger.error(f"send_media_notification failed: {data}")
+        except Exception as e:
+            logger.error(f"send_media_notification failed: {e}")
 
     async def edit_message(self, message_id: int, text: str) -> bool:
         """Edit an existing bot message."""

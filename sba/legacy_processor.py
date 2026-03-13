@@ -315,6 +315,11 @@ async def _scan_folder(
     stats: dict, _list,
 ) -> None:
     """Scan one folder: send decisions for unclassified subfolders. Files are not processed."""
+    # Skip folders the user has acknowledged or fully processed
+    own_status = await db.get_folder_status("gdrive", folder_id)
+    if own_status == "folder_done":
+        return
+
     items = await asyncio.to_thread(lambda: list(_list(service, folder_id, False)))
 
     subfolders = [i for i in items if i.get("mimeType") == FOLDER_MIME]
@@ -352,9 +357,13 @@ async def _scan_folder(
     # ── Media: notify only (no AI processing of files in legacy) ────────────
     media_files = [f for f in files if _is_media(f.get("mimeType", ""))]
     if media_files:
+        title = path_stack[-1] if path_stack else folder_id
+        path = " / ".join(path_stack)
+        reg_id, _ = await db.upsert_folder("gdrive", folder_id, title, path)
         await notifier.send_media_notification(
-            path=" / ".join(path_stack),
+            path=path,
             media_files=[f.get("name", "") for f in media_files],
+            reg_id=reg_id,
         )
 
 

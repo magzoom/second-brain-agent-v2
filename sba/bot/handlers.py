@@ -349,6 +349,29 @@ def _blocking_create_summary(config: dict, folder_id: str, title: str, path: str
     return file_info["id"], summary_text, file_info.get("webViewLink", "")
 
 
+# ── Media acknowledgement callback ───────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("media_ack:"))
+async def callback_media_ack(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    reg_id = int(callback.data.split(":")[1])
+    async with Database(get_db_path(_config)) as db:
+        await db.set_folder_status_by_id(reg_id, "folder_done")
+        try:
+            original = callback.message.html_text or callback.message.text or ""
+            await callback.message.edit_text(
+                original + "\n\n✅ Ознакомлен — повторных уведомлений не будет",
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            logger.warning(f"callback_media_ack edit_text failed: {e}")
+
+
 # ── Deletion callbacks ────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("confirm_del:"))
