@@ -56,19 +56,8 @@ class Notifier:
         await self.send("\n".join(parts))
 
     async def send_legacy_report(self, processed: int, actions_created: int, pending_deletions: int, errors: int = 0, folders_decided: int = 0) -> None:
-        # Folder decision cards are already sent individually — no summary needed
-        if processed == 0 and errors == 0:
-            return
-        parts = ["🗂 <b>Legacy обработан</b>"]
-        if processed:
-            parts.append(f"📋 Файлов обработано: {processed}")
-        if actions_created:
-            parts.append(f"✅ Задач создано: {actions_created}")
-        if pending_deletions:
-            parts.append(f"🗑 Ожидают удаления: {pending_deletions}")
-        if errors:
-            parts.append(f"❌ Ошибок: {errors}")
-        await self.send("\n".join(parts))
+        # Folder/note cards are sent individually — no summary needed
+        pass
 
     async def send_error(self, error_msg: str, module: str = "SBA") -> None:
         msg = f"❌ <b>Ошибка [{module}]</b>\n{error_msg}"
