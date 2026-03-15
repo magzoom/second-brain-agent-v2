@@ -236,7 +236,8 @@ def find_folder_by_name(service, folder_name: str, parent_id: str = None) -> Opt
     Returns folder ID or None if not found.
     Optionally restrict to children of parent_id.
     """
-    query = f"mimeType='application/vnd.google-apps.folder' and name='{folder_name}' and trashed=false"
+    safe_name = folder_name.replace("\\", "\\\\").replace("'", "\\'")
+    query = f"mimeType='application/vnd.google-apps.folder' and name='{safe_name}' and trashed=false"
     if parent_id:
         query += f" and '{parent_id}' in parents"
     try:
@@ -288,8 +289,8 @@ def create_summary_file(service, folder_id: str, content: str) -> dict:
     for f in existing:
         try:
             service.files().delete(fileId=f["id"]).execute()
-        except HttpError:
-            pass
+        except HttpError as e:
+            logger.debug(f"Failed to delete old summary {f['id']} (already gone?): {e}")
 
     metadata = {"name": "_sba_summary.md", "parents": [folder_id], "mimeType": "text/markdown"}
     media = MediaInMemoryUpload(content.encode("utf-8"), mimetype="text/markdown")

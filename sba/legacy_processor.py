@@ -471,6 +471,7 @@ async def _process_apple_notes_legacy(
             db=db, notifier=notifier, config=config,
             source="apple_notes", source_id=note_id,
             title=title, content=content, stats=stats,
+            reg_id=reg_id,
         )
         processed += 1
 
@@ -485,6 +486,7 @@ async def _process_apple_notes_legacy(
 async def _run_agent_on_legacy_item(
     db: Database, notifier: Notifier, config: dict,
     source: str, source_id: str, title: str, content: str, stats: dict,
+    reg_id: int = 0,
 ) -> None:
     """Send a single legacy item to Main Agent."""
     from sba import agent as main_agent
@@ -517,5 +519,7 @@ async def _run_agent_on_legacy_item(
     except Exception as e:
         logger.error(f"Agent failed for '{title}': {e}")
         stats["errors"] += 1
+        if reg_id:
+            await db.update_file_status(reg_id, "error")
 
 

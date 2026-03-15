@@ -343,6 +343,16 @@ class Database:
                 file_id = cur.lastrowid
             await self._conn.commit()
 
+        # Prevent duplicates — reuse existing waiting request for the same file
+        async with self._conn.execute(
+            "SELECT id FROM pending_deletions WHERE file_id=? AND status='waiting'",
+            (file_id,),
+        ) as cur:
+            existing = await cur.fetchone()
+        if existing:
+            logger.debug(f"Reusing existing pending deletion id={existing['id']} for file_id={file_id}")
+            return existing["id"]
+
         async with self._conn.execute(
             "INSERT INTO pending_deletions (file_id) VALUES (?)", (file_id,)
         ) as cur:

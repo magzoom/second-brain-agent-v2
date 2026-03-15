@@ -101,8 +101,8 @@ async def _get_telegram_channel_posts_tool(args: dict[str, Any]) -> dict[str, An
                                 "url": f"https://t.me/{username}/{msg.id}" if username else None,
                             })
                             channel_count += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Skipping channel '{channel.name}': {e}")
         finally:
             await client.disconnect()
 
@@ -259,8 +259,8 @@ async def _fetch_posts(config: dict, hours_back: int) -> str:
                             "url": f"https://t.me/{username}/{msg.id}" if username else None,
                         })
                         channel_count += 1
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Skipping channel '{channel.name}': {e}")
     finally:
         await client.disconnect()
 

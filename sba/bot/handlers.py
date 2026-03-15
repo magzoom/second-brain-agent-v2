@@ -223,16 +223,16 @@ async def callback_folder_deep(callback: CallbackQuery) -> None:
         return
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"callback.answer() failed (expired?): {e}")
     reg_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         row = await db.get_file_by_id(reg_id)
         if not row:
             try:
                 await callback.message.edit_text("⚠️ Запись не найдена")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"callback_folder_deep: record {reg_id} not found, edit_text failed: {e}")
             return
         if row.get("status") not in ("pending_decision", "pending_deep"):
             return
@@ -251,8 +251,8 @@ async def callback_folder_summary(callback: CallbackQuery) -> None:
         return
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"callback.answer() failed (expired?): {e}")
     reg_id = int(callback.data.split(":")[1])
 
     async with Database(get_db_path(_config)) as db:
@@ -260,8 +260,8 @@ async def callback_folder_summary(callback: CallbackQuery) -> None:
     if not row:
         try:
             await callback.message.edit_text("⚠️ Запись не найдена")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"callback_folder_summary: record {reg_id} not found, edit_text failed: {e}")
         return
     if row.get("status") == "folder_summary":
         return
@@ -337,7 +337,10 @@ def _blocking_create_summary(config: dict, folder_id: str, title: str, path: str
         f"## Описание (2-3 предложения что тут хранится и зачем). Только markdown."
     )
 
-    client = anthropic.Anthropic(api_key=config.get("anthropic", {}).get("api_key", ""))
+    client = anthropic.Anthropic(
+        api_key=config.get("anthropic", {}).get("api_key", ""),
+        timeout=30.0,
+    )
     model = config.get("classifier", {}).get("model", "claude-haiku-4-5-20251001")
     response = client.messages.create(
         model=model, max_tokens=500,
@@ -357,8 +360,8 @@ async def callback_media_ack(callback: CallbackQuery) -> None:
         return
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"callback.answer() failed (expired?): {e}")
     reg_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         await db.set_folder_status_by_id(reg_id, "folder_done")
@@ -380,8 +383,8 @@ async def callback_confirm_del(callback: CallbackQuery) -> None:
         return
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"callback.answer() failed (expired?): {e}")
     deletion_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         result = await db.confirm_deletion(deletion_id)
@@ -400,8 +403,8 @@ async def callback_cancel_del(callback: CallbackQuery) -> None:
         return
     try:
         await callback.answer()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"callback.answer() failed (expired?): {e}")
     deletion_id = int(callback.data.split(":")[1])
     async with Database(get_db_path(_config)) as db:
         await db.cancel_deletion(deletion_id)
