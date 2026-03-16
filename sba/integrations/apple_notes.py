@@ -8,6 +8,7 @@ Write → AppleScript — ensures iCloud sync integrity
 import json
 import subprocess
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -200,9 +201,10 @@ def move_note_to_folder(note_title: str, target_folder: str) -> bool:
     return True
 
 
-def move_note_by_id(note_id: str, target_folder: str) -> bool:
+def move_note_by_id(note_id: str, target_folder: str, retries: int = 3, retry_delay: float = 3.0) -> bool:
     """Move a note to another folder by its stable JXA ID (x-coredata://...).
     Uses AppleScript (not JXA) — JXA container= assignment fails with -10003 on macOS 26.
+    Retries on transient -10003 errors (iCloud sync in progress).
     """
     safe_id = _escape_applescript(note_id)
     safe_folder = _escape_applescript(target_folder)
@@ -217,12 +219,19 @@ def move_note_by_id(note_id: str, target_folder: str) -> bool:
         move matchedNote to targetFolder
     end tell
     """
-    result = _run_osascript(script)
-    if result["returncode"] != 0:
-        logger.error(f"Failed to move note by id '{note_id}': {result['stderr']}")
-        return False
-    logger.info(f"Moved note {note_id} → '{target_folder}'")
-    return True
+    for attempt in range(1, retries + 1):
+        result = _run_osascript(script)
+        if result["returncode"] == 0:
+            logger.info(f"Moved note {note_id} → '{target_folder}'")
+            return True
+        stderr = result["stderr"]
+        if "-10003" in stderr and attempt < retries:
+            logger.warning(f"move_note_by_id attempt {attempt}/{retries} failed (-10003, Notes syncing?), retrying in {retry_delay}s")
+            time.sleep(retry_delay)
+        else:
+            logger.error(f"Failed to move note by id '{note_id}': {stderr}")
+            return False
+    return False
 
 
 def delete_note_by_id(note_id: str) -> bool:
