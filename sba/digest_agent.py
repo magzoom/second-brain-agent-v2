@@ -237,7 +237,9 @@ async def _fetch_posts(config: dict, hours_back: int) -> str:
     since = datetime.now() - timedelta(hours=hours_back)
     MAX_POSTS, MAX_PER_CHANNEL = 60, 3
     posts = []
-    client = TelegramClient(session_path, api_id, api_hash)
+    # receive_updates=False — не обрабатывать входящие апдейты,
+    # иначе Telethon выдаёт security errors на старых message ID и зависает
+    client = TelegramClient(session_path, api_id, api_hash, receive_updates=False)
     try:
         await asyncio.wait_for(client.connect(), timeout=10)
         dialogs = await client.get_dialogs()

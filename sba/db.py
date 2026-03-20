@@ -27,7 +27,7 @@ def init_db_sync(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA busy_timeout=30000")
         conn.execute("PRAGMA foreign_keys=ON")
         _create_tables(conn)
         conn.commit()
@@ -158,7 +158,7 @@ def _create_tables(conn: sqlite3.Connection) -> None:
 async def get_connection(db_path: Path) -> aiosqlite.Connection:
     conn = await aiosqlite.connect(str(db_path))
     await conn.execute("PRAGMA journal_mode=WAL")
-    await conn.execute("PRAGMA busy_timeout=5000")
+    await conn.execute("PRAGMA busy_timeout=30000")
     await conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = aiosqlite.Row
     return conn
