@@ -13,6 +13,7 @@ Uses fcntl-based lock (OS auto-releases on crash).
 import asyncio
 import hashlib
 import logging
+import re
 from pathlib import Path
 
 from sba.db import Database, get_db_path
@@ -208,19 +209,26 @@ async def _goal_tracker(db: Database, notifier: Notifier, config: dict) -> None:
         )
         transformed_text = response.content[0].text
         parsed = []
+        matched_indices = set()
         for line in transformed_text.strip().split("\n"):
-            line = line.strip("- ").strip()
+            line = re.sub(r"^[\s\-•]+", "", line).strip()
+            if not line:
+                continue
             if "[" in line and "]" in line:
                 bracket_start = line.rfind("[")
                 bracket_end = line.rfind("]")
-                list_name = line[bracket_start + 1:bracket_end]
+                list_name = line[bracket_start + 1:bracket_end].strip()
                 title_part = line[:bracket_start].strip()
+                if not title_part:
+                    continue
                 original_list = next((lst for _, lst, _ in new_entries if lst == list_name), list_name)
                 parsed.append((title_part, original_list))
             else:
-                for orig_title, orig_list, _ in new_entries:
-                    if orig_title[:20] in line:
+                # Fallback: match against any unmatched original entry
+                for i, (orig_title, orig_list, _) in enumerate(new_entries):
+                    if i not in matched_indices and orig_title.lower() in line.lower():
                         parsed.append((line, orig_list))
+                        matched_indices.add(i)
                         break
         if parsed:
             transformed_entries = parsed
@@ -272,6 +280,7 @@ async def _process_gdrive_legacy(
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
         logger.error(f"Google Drive auth failed: {e}")
+        await notifier.send_message(f"⚠️ <b>Google Drive авторизация провалилась</b> (legacy)\nЗапусти <code>sba auth google</code>\n\n{e}")
         stats["errors"] += 1
         return
 

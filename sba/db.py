@@ -152,7 +152,88 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             value       TEXT NOT NULL,
             updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- Finance tables
+        CREATE TABLE IF NOT EXISTS fin_accounts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL UNIQUE,
+            label       TEXT NOT NULL,
+            balance     REAL NOT NULL DEFAULT 0,
+            currency    TEXT NOT NULL DEFAULT 'KZT',
+            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS fin_transactions (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            account     TEXT,
+            amount      REAL NOT NULL,
+            tx_type     TEXT NOT NULL,
+            category    TEXT,
+            description TEXT,
+            tx_date     DATE NOT NULL DEFAULT (date('now')),
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS fin_liabilities (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL UNIQUE,
+            creditor        TEXT,
+            amount          REAL NOT NULL DEFAULT 0,
+            monthly_payment REAL,
+            due_date        DATE,
+            lib_type        TEXT NOT NULL DEFAULT 'personal',
+            notes           TEXT,
+            is_active       INTEGER NOT NULL DEFAULT 1,
+            updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS fin_zakat_profile (
+            id                  INTEGER PRIMARY KEY,
+            nisab_crossed_at    DATE,
+            last_check_at       DATE,
+            gold_grams_wife     REAL DEFAULT 0,
+            notes               TEXT,
+            updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Recurring finance reminders
+        CREATE TABLE IF NOT EXISTS fin_recurring (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            label           TEXT NOT NULL,
+            day_of_month    INTEGER NOT NULL DEFAULT 0,
+            amount          REAL,
+            remind_days_before INTEGER NOT NULL DEFAULT 0,
+            is_active       INTEGER NOT NULL DEFAULT 1,
+            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
     """)
+
+
+    # Seed initial finance data (idempotent via INSERT OR IGNORE)
+    _accounts = [
+        ("kaspi_main",     "Kaspi (основной)",    0.0),
+        ("kaspi_second",   "Kaspi (второй счёт)", 0.0),
+        ("freedom",        "Freedom Bank",         0.0),
+        ("halyk",          "Halyk Bank",            0.0),
+        ("rbk",            "RBK/Tayyab",            0.0),
+        ("kaspi_business", "Kaspi Business",        0.0),
+    ]
+    for n, l, b in _accounts:
+        conn.execute(
+            "INSERT OR IGNORE INTO fin_accounts (name, label, balance) VALUES (?,?,?)", (n, l, b)
+        )
+    _liabilities = [
+        ("people_debt",       "Долги людям",        0.0, None, None, "personal",    ""),
+        ("kaspi_installment", "Рассрочка Kaspi",    0.0, None, None, "installment", ""),
+        ("transport_tax",     "Налог на транспорт",  0.0, None, None, "tax",         ""),
+    ]
+    for n, c, a, mp, dd, lt, nt in _liabilities:
+        conn.execute(
+            "INSERT OR IGNORE INTO fin_liabilities (name, creditor, amount, monthly_payment, due_date, lib_type, notes) VALUES (?,?,?,?,?,?,?)",
+            (n, c, a, mp, dd, lt, nt)
+        )
+    conn.execute("INSERT OR IGNORE INTO fin_zakat_profile (id) VALUES (1)")
+    conn.commit()
 
 
 async def get_connection(db_path: Path) -> aiosqlite.Connection:
@@ -198,12 +279,13 @@ class Database:
 
         # Row existed — fetch and check if content changed
         async with self._conn.execute(
-            "SELECT id, content_hash FROM files_registry WHERE source=? AND source_id=?",
+            "SELECT id, content_hash, status FROM files_registry WHERE source=? AND source_id=?",
             (source, source_id),
         ) as cur:
             row = await cur.fetchone()
 
-        if row["content_hash"] != content_hash:
+        # Don't reset files pending deletion — avoids reprocessing after agent-initiated deletion
+        if row["content_hash"] != content_hash and row["status"] != "pending":
             await self._conn.execute(
                 "UPDATE files_registry SET content_hash=?, title=?, path=?, type=?, status='new', processed_at=NULL WHERE id=?",
                 (content_hash, title, path, entry_type, row["id"]),
@@ -401,7 +483,7 @@ class Database:
 
     async def mark_deletion_executed(self, deletion_id: int) -> None:
         await self._conn.execute(
-            "UPDATE pending_deletions SET status='deleted' WHERE id=?", (deletion_id,)
+            "UPDATE pending_deletions SET status='deleted' WHERE id=? AND status='confirmed'", (deletion_id,)
         )
         await self._conn.commit()
 
@@ -553,6 +635,203 @@ class Database:
             (msg_id, deletion_id),
         )
         await self._conn.commit()
+
+    # ── Finance ───────────────────────────────────────────────────────────────
+
+    async def fin_get_accounts(self) -> list:
+        async with self._conn.execute(
+            "SELECT * FROM fin_accounts ORDER BY name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def fin_get_account(self, name: str) -> Optional[dict]:
+        async with self._conn.execute(
+            "SELECT * FROM fin_accounts WHERE name=?", (name,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def fin_update_balance(self, account_name: str, new_balance: float, note: str = "") -> None:
+        """Update account balance, record implied transaction."""
+        acc = await self.fin_get_account(account_name)
+        if acc:
+            diff = new_balance - acc["balance"]
+            if abs(diff) > 0.01:
+                tx_type = "income" if diff > 0 else "expense"
+                desc = note or ("Корректировка баланса" if not note else note)
+                await self.fin_add_transaction(account_name, abs(diff), tx_type, "корректировка", desc)
+        await self._conn.execute(
+            "UPDATE fin_accounts SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+            (new_balance, account_name),
+        )
+        await self._conn.commit()
+
+    async def fin_add_transaction(
+        self, account: Optional[str], amount: float, tx_type: str,
+        category: str = "", description: str = "", tx_date: str = "",
+    ) -> int:
+        """Add transaction and update account balance. Returns transaction id."""
+        if not tx_date:
+            from datetime import date
+            tx_date = date.today().isoformat()
+        async with self._conn.execute(
+            "INSERT INTO fin_transactions (account, amount, tx_type, category, description, tx_date) VALUES (?,?,?,?,?,?)",
+            (account, amount, tx_type, category or "", description or "", tx_date),
+        ) as cur:
+            tx_id = cur.lastrowid
+
+        # Update account balance atomically with the insert
+        if account:
+            if tx_type in ("income", "debt_taken"):
+                await self._conn.execute(
+                    "UPDATE fin_accounts SET balance=balance+?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                    (amount, account),
+                )
+            elif tx_type in ("expense", "debt_paid", "transfer_out"):
+                await self._conn.execute(
+                    "UPDATE fin_accounts SET balance=balance-?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                    (amount, account),
+                )
+        await self._conn.commit()
+        return tx_id
+
+    async def fin_get_liabilities(self) -> list:
+        async with self._conn.execute(
+            "SELECT * FROM fin_liabilities WHERE is_active=1 ORDER BY lib_type, name"
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def fin_upsert_liability(
+        self, name: str, creditor: str, amount: float,
+        lib_type: str = "personal", monthly_payment: Optional[float] = None,
+        due_date: Optional[str] = None, notes: str = "",
+    ) -> None:
+        await self._conn.execute(
+            """INSERT INTO fin_liabilities (name, creditor, amount, lib_type, monthly_payment, due_date, notes)
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(name) DO UPDATE SET
+                 creditor=excluded.creditor, amount=excluded.amount, lib_type=excluded.lib_type,
+                 monthly_payment=excluded.monthly_payment, due_date=excluded.due_date,
+                 notes=excluded.notes, updated_at=CURRENT_TIMESTAMP""",
+            (name, creditor, amount, lib_type, monthly_payment, due_date, notes or ""),
+        )
+        await self._conn.commit()
+
+    async def fin_update_liability_amount(self, name: str, new_amount: float) -> bool:
+        async with self._conn.execute(
+            "UPDATE fin_liabilities SET amount=?, updated_at=CURRENT_TIMESTAMP WHERE name=? AND is_active=1",
+            (new_amount, name),
+        ) as cur:
+            changed = cur.rowcount > 0
+        await self._conn.commit()
+        return changed
+
+    async def fin_get_transactions(self, days: int = 30, account: Optional[str] = None) -> list:
+        q = "SELECT * FROM fin_transactions WHERE tx_date >= date('now', ? || ' days')"
+        params: list = [f"-{days}"]
+        if account:
+            q += " AND account=?"
+            params.append(account)
+        q += " ORDER BY tx_date DESC, created_at DESC LIMIT 100"
+        async with self._conn.execute(q, params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def fin_get_zakat_profile(self) -> Optional[dict]:
+        async with self._conn.execute("SELECT * FROM fin_zakat_profile WHERE id=1") as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def fin_update_zakat_profile(
+        self, nisab_crossed_at: Optional[str] = None,
+        gold_grams_wife: Optional[float] = None,
+        notes: Optional[str] = None,
+    ) -> None:
+        fields, vals = [], []
+        if nisab_crossed_at is not None:
+            fields.append("nisab_crossed_at=?"); vals.append(nisab_crossed_at)
+        if gold_grams_wife is not None:
+            fields.append("gold_grams_wife=?"); vals.append(gold_grams_wife)
+        if notes is not None:
+            fields.append("notes=?"); vals.append(notes)
+        if not fields:
+            return
+        fields.append("updated_at=CURRENT_TIMESTAMP")
+        vals.append(1)
+        await self._conn.execute(
+            f"UPDATE fin_zakat_profile SET {', '.join(fields)} WHERE id=?", vals
+        )
+        await self._conn.commit()
+
+    async def fin_get_monthly_summary(self, year: int, month: int) -> dict:
+        """Return income, expense totals and category breakdown for a given month."""
+        prefix = f"{year:04d}-{month:02d}"
+        async with self._conn.execute(
+            """SELECT tx_type, category, SUM(amount) as total
+               FROM fin_transactions WHERE tx_date LIKE ? GROUP BY tx_type, category""",
+            (f"{prefix}%",),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        income = sum(r["total"] for r in rows if r["tx_type"] == "income")
+        expense = sum(r["total"] for r in rows if r["tx_type"] == "expense")
+        return {"year": year, "month": month, "income": income, "expense": expense, "rows": rows}
+
+    # ── Recurring reminders ───────────────────────────────────────────────────
+
+    async def fin_get_recurring(self, active_only: bool = True) -> list:
+        q = "SELECT * FROM fin_recurring"
+        if active_only:
+            q += " WHERE is_active=1"
+        q += " ORDER BY day_of_month, label"
+        async with self._conn.execute(q) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def fin_upsert_recurring(
+        self, label: str, day_of_month: int, amount: float = None,
+        remind_days_before: int = 0,
+    ) -> int:
+        async with self._conn.execute(
+            """INSERT INTO fin_recurring (label, day_of_month, amount, remind_days_before)
+               VALUES (?,?,?,?)""",
+            (label, day_of_month, amount, remind_days_before),
+        ) as cur:
+            row_id = cur.lastrowid
+        await self._conn.commit()
+        return row_id
+
+    async def fin_delete_recurring(self, item_id: int) -> bool:
+        await self._conn.execute(
+            "UPDATE fin_recurring SET is_active=0 WHERE id=?", (item_id,)
+        )
+        await self._conn.commit()
+        return True
+
+    async def fin_get_due_recurring(self, today_day: int, days_in_month: int = 31) -> list:
+        """Return reminders due today: day_of_month==today OR day_of_month==0 (daily)
+        OR advance reminder fires remind_days_before days before day_of_month,
+        with wraparound across month boundaries."""
+        async with self._conn.execute(
+            "SELECT * FROM fin_recurring WHERE is_active=1 ORDER BY day_of_month, label"
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+        result = []
+        for r in rows:
+            dom = r["day_of_month"]
+            rdb = r.get("remind_days_before") or 0
+            if dom == 0:
+                # daily
+                result.append(r)
+            elif dom == today_day:
+                # exact due day
+                result.append(r)
+            elif rdb > 0:
+                # advance reminder with wraparound: trigger_day = dom - rdb, wrapping into prev month
+                trigger = dom - rdb
+                if trigger <= 0:
+                    trigger += days_in_month
+                if trigger == today_day:
+                    result.append(r)
+        return result
 
     # ── statistics ────────────────────────────────────────────────────────────
 

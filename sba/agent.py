@@ -21,6 +21,7 @@ from sba.db import Database
 from sba.notifier import Notifier
 from sba.integrations import apple_notes, google_tasks, google_calendar
 from sba import research_agent as _research_module
+from sba import finance as _finance_module
 
 logger = logging.getLogger(__name__)
 
@@ -303,6 +304,239 @@ async def _request_deletion_tool(args: dict[str, Any]) -> dict[str, Any]:
     return _ok("Запрос на удаление создан, ожидает подтверждения пользователя")
 
 
+@tool("finance_get_balance", "Получить текущие балансы всех счетов и список обязательств.", {
+    "type": "object", "properties": {}, "required": [],
+})
+async def _finance_get_balance_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    accounts = await _db.fin_get_accounts()
+    liabilities = await _db.fin_get_liabilities()
+    total_cash = sum(a["balance"] for a in accounts if a["balance"] > 0)
+    total_debt = sum(l["amount"] for l in liabilities)
+    lines = ["Счета:"]
+    for a in accounts:
+        lines.append(f"  {a['label']}: {a['balance']:,.0f} ₸")
+    lines.append(f"Итого на счетах: {total_cash:,.0f} ₸")
+    lines.append("\nОбязательства:")
+    for l in liabilities:
+        mp = f" (ежемес. {l['monthly_payment']:,.0f})" if l.get("monthly_payment") else ""
+        dd = f" до {l['due_date']}" if l.get("due_date") else ""
+        lines.append(f"  {l['creditor'] or l['name']}: {l['amount']:,.0f} ₸{mp}{dd}")
+    lines.append(f"Итого долгов: {total_debt:,.0f} ₸")
+    lines.append(f"\nЧистые активы: {total_cash - total_debt:,.0f} ₸")
+    return _ok("\n".join(lines))
+
+
+@tool("finance_add_transaction", "Добавить доход или расход.", {
+    "type": "object",
+    "properties": {
+        "account":     {"type": "string", "description": "Название счёта (kaspi_main, kaspi_second, freedom, halyk, rbk, kaspi_business)"},
+        "amount":      {"type": "number",  "description": "Сумма (всегда положительная)"},
+        "tx_type":     {"type": "string",  "description": "income, expense, debt_taken, debt_paid"},
+        "category":    {"type": "string",  "description": "Категория (еда, кафе, транспорт, коммуналка, зарплата и т.д.)"},
+        "description": {"type": "string",  "description": "Описание транзакции"},
+        "tx_date":     {"type": "string",  "description": "Дата YYYY-MM-DD (если не сегодня)"},
+    },
+    "required": ["amount", "tx_type"],
+})
+async def _finance_add_transaction_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    from sba import finance as _fin
+    account_raw = args.get("account", "")
+    account = _fin.resolve_account(account_raw) if account_raw else None
+    amount = float(args.get("amount", 0))
+    tx_type = args.get("tx_type", "expense")
+    category = args.get("category", "")
+    description = args.get("description", "")
+    tx_date = args.get("tx_date", "")
+    await _db.fin_add_transaction(account, amount, tx_type, category, description, tx_date)
+    sign = "+" if tx_type in ("income", "debt_taken") else "-"
+    acc_label = account or "без счёта"
+    return _ok(f"Записано: {sign}{amount:,.0f} ₸ [{category or tx_type}] {acc_label}")
+
+
+@tool("finance_update_account", "Обновить баланс счёта (пользователь сообщил актуальный баланс).", {
+    "type": "object",
+    "properties": {
+        "account":     {"type": "string", "description": "Название счёта (kaspi_main, kaspi_second, freedom, halyk, rbk, kaspi_business)"},
+        "new_balance": {"type": "number", "description": "Новый баланс в тенге"},
+        "note":        {"type": "string", "description": "Комментарий (опционально)"},
+    },
+    "required": ["account", "new_balance"],
+})
+async def _finance_update_account_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    from sba import finance as _fin
+    account = _fin.resolve_account(args.get("account", ""))
+    new_balance = float(args.get("new_balance", 0))
+    note = args.get("note", "")
+    acc = await _db.fin_get_account(account)
+    if not acc:
+        return _ok(f"Счёт '{account}' не найден. Доступные: kaspi_main, kaspi_second, freedom, halyk, rbk, kaspi_business")
+    old = acc["balance"]
+    await _db.fin_update_balance(account, new_balance, note)
+    diff = new_balance - old
+    sign = "+" if diff >= 0 else ""
+    return _ok(f"{acc['label']} обновлён: {old:,.0f} → {new_balance:,.0f} ₸ ({sign}{diff:,.0f} ₸)")
+
+
+@tool("finance_manage_liability", "Добавить новый долг или обновить остаток существующего.", {
+    "type": "object",
+    "properties": {
+        "action":      {"type": "string",  "description": "add_new или update_amount"},
+        "name":        {"type": "string",  "description": "Внутренний идентификатор (people_debt, kaspi_installment, transport_tax или новый)"},
+        "creditor":    {"type": "string",  "description": "Имя кредитора / название"},
+        "amount":      {"type": "number",  "description": "Сумма долга (для add_new) или новый остаток (для update_amount)"},
+        "lib_type":    {"type": "string",  "description": "personal, installment, tax, loan"},
+        "monthly_payment": {"type": "number", "description": "Ежемесячный платёж (опционально)"},
+        "due_date":    {"type": "string",  "description": "Дата погашения YYYY-MM-DD (опционально)"},
+        "notes":       {"type": "string",  "description": "Примечания"},
+    },
+    "required": ["action", "name", "amount"],
+})
+async def _finance_manage_liability_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    from sba import finance as _fin
+    action = args.get("action", "add_new")
+    name = _fin.resolve_liability(args.get("name", ""))
+    amount = float(args.get("amount", 0))
+
+    if action == "update_amount":
+        ok = await _db.fin_update_liability_amount(name, amount)
+        if ok:
+            return _ok(f"Остаток по '{name}' обновлён: {amount:,.0f} ₸")
+        return _ok(f"Обязательство '{name}' не найдено")
+    else:
+        creditor = args.get("creditor", name)
+        lib_type = args.get("lib_type", "personal")
+        monthly = args.get("monthly_payment")
+        due = args.get("due_date")
+        notes = args.get("notes", "")
+        await _db.fin_upsert_liability(name, creditor, amount, lib_type,
+                                        float(monthly) if monthly else None, due, notes)
+        return _ok(f"Обязательство '{creditor}' сохранено: {amount:,.0f} ₸")
+
+
+@tool("finance_get_zakat", "Рассчитать текущий статус закята.", {
+    "type": "object", "properties": {}, "required": [],
+})
+async def _finance_get_zakat_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    from sba import finance as _fin
+    status = await _fin.calculate_zakat_status(_db)
+    lines = [
+        f"Нисаб (85г золота): {status['nisab_kzt']:,.0f} ₸",
+        f"Деньги на счетах: {status['cash_assets']:,.0f} ₸",
+        f"Обязательства: {status['total_liabilities']:,.0f} ₸",
+        f"Чистые активы: {status['net_assets']:,.0f} ₸",
+        "",
+        "ЗАКЯТ: " + ("ОБЯЗАТЕЛЕН" if status["obligatory"] else "не обязателен"),
+        status["reason"],
+    ]
+    if status["obligatory"]:
+        lines.append(f"Сумма к оплате: {status['amount_due']:,.0f} ₸")
+    if status.get("price_is_stale"):
+        lines.append("\n⚠️ Курс золота недоступен (Yahoo Finance), использован устаревший fallback 80 000 ₸/г")
+    return _ok("\n".join(lines))
+
+
+@tool("finance_get_summary", "Получить финансовую сводку за текущий или прошлый месяц.", {
+    "type": "object",
+    "properties": {
+        "period": {"type": "string", "description": "this_month или last_month", "default": "this_month"},
+    },
+    "required": [],
+})
+async def _finance_get_summary_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    from datetime import date
+    today = date.today()
+    period = args.get("period", "this_month")
+    if period == "last_month":
+        month = today.month - 1 or 12
+        year = today.year if today.month > 1 else today.year - 1
+    else:
+        month = today.month
+        year = today.year
+    summary = await _db.fin_get_monthly_summary(year, month)
+    income = summary["income"]
+    expense = summary["expense"]
+    lines = [
+        f"Сводка за {month:02d}/{year}:",
+        f"  Доходы:  +{income:,.0f} ₸",
+        f"  Расходы: -{expense:,.0f} ₸",
+        f"  Баланс:  {income - expense:+,.0f} ₸",
+    ]
+    cats: dict = {}
+    for r in summary["rows"]:
+        if r["tx_type"] == "expense" and r["category"]:
+            cats[r["category"]] = cats.get(r["category"], 0) + r["total"]
+    if cats:
+        lines.append("\nРасходы по категориям:")
+        for cat, total in sorted(cats.items(), key=lambda x: -x[1]):
+            lines.append(f"  {cat}: {total:,.0f} ₸")
+    return _ok("\n".join(lines))
+
+
+@tool("finance_manage_recurring", "Добавить или удалить регулярное финансовое напоминание.", {
+    "type": "object",
+    "properties": {
+        "action":       {"type": "string",  "description": "add или delete"},
+        "label":        {"type": "string",  "description": "Описание: 'Коммуналка', 'Google AI Pro', 'Садака', 'Школа'"},
+        "day_of_month": {"type": "integer", "description": "День месяца 1-31. 0 = ежедневно"},
+        "amount":       {"type": "number",  "description": "Сумма в тенге (опционально)"},
+        "remind_days_before": {"type": "integer", "description": "За сколько дней до срока напоминать (default 0)", "default": 0},
+        "item_id":      {"type": "integer", "description": "ID записи для удаления (только для action=delete)"},
+    },
+    "required": ["action"],
+})
+async def _finance_manage_recurring_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    action = args.get("action", "add")
+    if action == "delete":
+        item_id = args.get("item_id")
+        if not item_id:
+            return _ok("Укажи ID записи для удаления")
+        await _db.fin_delete_recurring(int(item_id))
+        return _ok(f"Напоминание #{item_id} отключено")
+    else:
+        label = args.get("label", "")
+        day = int(args.get("day_of_month", 0))
+        amount = args.get("amount")
+        remind_before = int(args.get("remind_days_before", 0))
+        if not label:
+            return _ok("Укажи описание напоминания")
+        row_id = await _db.fin_upsert_recurring(label, day, float(amount) if amount else None, remind_before)
+        day_str = "ежедневно" if day == 0 else f"{day}-го числа каждого месяца"
+        amount_str = f" ({amount:,.0f} ₸)" if amount else ""
+        return _ok(f"Напоминание #{row_id} добавлено: {label}{amount_str} — {day_str}")
+
+
+@tool("finance_list_recurring", "Показать все активные регулярные напоминания.", {
+    "type": "object", "properties": {}, "required": [],
+})
+async def _finance_list_recurring_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    items = await _db.fin_get_recurring()
+    if not items:
+        return _ok("Регулярных напоминаний нет. Добавь через: 'напоминай 23 числа оплатить коммуналку'")
+    lines = ["Регулярные напоминания:"]
+    for item in items:
+        day_str = "ежедневно" if item["day_of_month"] == 0 else f"{item['day_of_month']}-го числа"
+        amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+        rb = f" (за {item['remind_days_before']} дн.)" if item.get("remind_days_before") else ""
+        lines.append(f"  #{item['id']} {item['label']}{amount_str} — {day_str}{rb}")
+    return _ok("\n".join(lines))
+
+
 # ── MCP servers ───────────────────────────────────────────────────────────────
 
 _main_server = create_sdk_mcp_server(
@@ -318,6 +552,14 @@ _main_server = create_sdk_mcp_server(
         _index_content_tool,
         _search_knowledge_tool,
         _request_deletion_tool,
+        _finance_get_balance_tool,
+        _finance_add_transaction_tool,
+        _finance_update_account_tool,
+        _finance_manage_liability_tool,
+        _finance_get_zakat_tool,
+        _finance_get_summary_tool,
+        _finance_manage_recurring_tool,
+        _finance_list_recurring_tool,
     ],
 )
 
@@ -354,6 +596,38 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 - ВАЖНО: если пользователь просит проиндексировать папку или спрашивает почему файлы не находятся — НИКОГДА не говори "не могу". Вместо этого объясни: "Папка будет проиндексирована автоматически через фоновый процесс legacy (каждый день по 3 файла). Чтобы ускорить — запусти `sba legacy` вручную в терминале несколько раз, или временно подними legacy_limit_drive в ~/.sba/config.yaml."
 
 Технические ошибки объясняй по-русски. Не используй английский.
+
+Финансы (личный финансист):
+- "баланс", "сколько денег", "мои счета" → finance_get_balance
+- "потратил X на Y", "купил X за Y" → finance_add_transaction (tx_type=expense)
+- "получил зарплату", "пришло X" → finance_add_transaction (tx_type=income)
+- "взял в долг у X сумма" → finance_manage_liability (action=add_new) + finance_add_transaction (tx_type=debt_taken)
+- "отдал X долг сумма" → finance_manage_liability (action=update_amount) + finance_add_transaction (tx_type=debt_paid)
+- "Каспи X тенге" или "баланс Каспи X" → finance_update_account
+- "закят", "зякат" → finance_get_zakat
+- "итоги месяца", "сводка" → finance_get_summary
+
+Маппинг счетов (используй эти имена в инструментах):
+  Каспи/Kaspi основной → kaspi_main
+  Каспи второй/второй счёт → kaspi_second
+  Freedom/Фридом → freedom
+  Halyk/Халык → halyk
+  RBK/Tayyab → rbk
+  Kaspi Business → kaspi_business
+
+Маппинг обязательств:
+  долги людям → people_debt
+  рассрочка Каспи → kaspi_installment
+  налог на транспорт → transport_tax
+
+Если пользователь не уточнил счёт — спроси с какого. Никогда не придумывай счёт.
+Даты: если пользователь говорит "вчера", "три дня назад" — вычисли правильную дату YYYY-MM-DD.
+
+Регулярные напоминания:
+- "напоминай каждый день X", "ежедневно X" → finance_manage_recurring (action=add, day_of_month=0)
+- "напоминай N-го числа Y", "каждый месяц N-го" → finance_manage_recurring (action=add, day_of_month=N)
+- "мои регулярные платежи", "список напоминаний" → finance_list_recurring
+- "удали напоминание #N" → finance_manage_recurring (action=delete, item_id=N)
 
 Стиль ответов — строго:
 - Максимум 2-3 коротких предложения. Не больше.
@@ -412,6 +686,14 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__index_content",
             "mcp__sba__search_knowledge",
             "mcp__sba__request_deletion",
+            "mcp__sba__finance_get_balance",
+            "mcp__sba__finance_add_transaction",
+            "mcp__sba__finance_update_account",
+            "mcp__sba__finance_manage_liability",
+            "mcp__sba__finance_get_zakat",
+            "mcp__sba__finance_get_summary",
+            "mcp__sba__finance_manage_recurring",
+            "mcp__sba__finance_list_recurring",
             "Task",  # для вызова Research Agent
         ],
         disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep"],

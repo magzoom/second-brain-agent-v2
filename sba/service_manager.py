@@ -4,8 +4,8 @@ launchd daemon manager for SBA 2.0.
 Daemons:
   bot     — Telegram bot, KeepAlive + ThrottleInterval=30, runs forever
   inbox   — Daily at 08:00, 12:00, 15:00, 18:00, 21:00 (StartCalendarInterval)
-  digest  — Daily at 09:00 (StartCalendarInterval)
-  legacy  — Daily at 09:10 (StartCalendarInterval)
+  legacy  — Daily at 09:00 (StartCalendarInterval)
+  digest  — Daily at 09:15 (StartCalendarInterval)
 
 Labels match v1 (com.sba.*) so installing v2 replaces v1 plists.
 Bot label is com.sba.bot (v1 used com.sba.telegram-bot — handled explicitly).
@@ -31,6 +31,8 @@ DAEMONS = {
     "inbox": "com.sba.inbox",
     "legacy": "com.sba.legacy",
     "digest": "com.sba.digest",
+    "finance": "com.sba.finance",
+    "fin_remind": "com.sba.fin_remind",
 }
 
 # v1 used a different label for the bot; unload it when installing v2 bot
@@ -145,7 +147,7 @@ def _legacy_plist() -> str:
     <key>Hour</key>
     <integer>9</integer>
     <key>Minute</key>
-    <integer>10</integer>
+    <integer>0</integer>
   </dict>
   <key>RunAtLoad</key>
   <false/>
@@ -184,6 +186,84 @@ def _digest_plist() -> str:
     <key>Hour</key>
     <integer>9</integer>
     <key>Minute</key>
+    <integer>15</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>{log}</string>
+  <key>StandardErrorPath</key>
+  <string>{log}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{SBA_VENV}/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>"""
+
+
+def _finance_plist() -> str:
+    log = get_log_path("finance")
+    python = str(SBA_PYTHON)
+    exe = str(SBA_EXE)
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sba.finance</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{python}</string>
+    <string>{exe}</string>
+    <string>finance</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Month</key><integer>1</integer><key>Day</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Month</key><integer>4</integer><key>Day</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Month</key><integer>7</integer><key>Day</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>30</integer></dict>
+    <dict><key>Month</key><integer>10</integer><key>Day</key><integer>1</integer><key>Hour</key><integer>9</integer><key>Minute</key><integer>30</integer></dict>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>{log}</string>
+  <key>StandardErrorPath</key>
+  <string>{log}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>{SBA_VENV}/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>"""
+
+
+def _fin_remind_plist() -> str:
+    log = get_log_path("fin_remind")
+    python = str(SBA_PYTHON)
+    exe = str(SBA_EXE)
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sba.fin_remind</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{python}</string>
+    <string>{exe}</string>
+    <string>fin-remind</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
     <integer>0</integer>
   </dict>
   <key>RunAtLoad</key>
@@ -206,6 +286,8 @@ _BUILDERS = {
     "inbox": _inbox_plist,
     "legacy": _legacy_plist,
     "digest": _digest_plist,
+    "finance": _finance_plist,
+    "fin_remind": _fin_remind_plist,
 }
 
 

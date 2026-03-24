@@ -3,24 +3,29 @@
 ## Архитектура
 
 **3 агента через Claude Agent SDK:**
-- `sba/agent.py` — Main Agent (оркестратор, GTD tools, 15 turns)
+- `sba/agent.py` — Main Agent (оркестратор, GTD + Finance tools, 15 turns)
 - `sba/digest_agent.py` — Digest Agent (утренний брифинг, независимый)
 - Research Agent — subagent внутри agent.py (AgentDefinition, WebSearch + FTS5)
 
-**4 демона (launchd):**
+**6 демонов (launchd):**
 - `com.sba.bot` — Telegram long polling, KeepAlive + ThrottleInterval=30
 - `com.sba.inbox` — 5 запусков в день: **08:00, 12:00, 15:00, 18:00, 21:00** (StartCalendarInterval, не cron)
-- `com.sba.digest` — **09:00**, утренний брифинг (первым)
-- `com.sba.legacy` — **09:10**, обработка накопленного + Goal Tracker (10 мин после digest)
+- `com.sba.legacy` — **09:00**, обработка накопленного + Goal Tracker (первым)
+- `com.sba.digest` — **09:15**, утренний брифинг (после legacy, читает актуальные задачи)
+- `com.sba.finance` — **1 янв/апр/июл/окт в 09:30**, квартальный финансовый отчёт + закят
+- `com.sba.fin_remind` — **08:00 ежедневно**, напоминания о регулярных платежах
 
 ## Ключевые файлы
 
 ```
 sba/
-  agent.py          — Main Agent + tools
+  agent.py          — Main Agent + tools (GTD + Finance)
   digest_agent.py   — Digest Agent (Telethon + Google Tasks)
   inbox_processor.py — Inbox (lock: inbox_v2.lock)
   legacy_processor.py — Legacy (lock: legacy_v2.lock)
+  finance_processor.py — Квартальный отчёт (lock: finance_v2.lock)
+  fin_remind_processor.py — Ежедневные напоминания (lock: fin_remind_v2.lock)
+  finance.py        — Логика закята, псевдонимы счетов, курс золота (Yahoo Finance)
   lock.py           — Shared fcntl lock (acquire/release)
   cli.py            — Click CLI (entry: sba=sba.cli:cli)
   service_manager.py — launchd plist builder/manager
@@ -40,12 +45,12 @@ sba/
 
 ## Конфиг и данные
 
-- `~/.sba/config.yaml` — общий с v1 (не трогать v1)
+- `~/.sba/config.yaml` — общий с v1 (не трогать v1), **chmod 600**
 - `~/.sba/sba.db` — общая БД с v1
 - `.venv/` — Python 3.12 venv
-- Логи: `~/.sba/logs/sba-{bot,inbox,legacy,digest}.log`
+- Логи: `~/.sba/logs/sba-{bot,inbox,legacy,digest,finance,fin_remind}.log`
 - Бэкапы: `~/.sba/backups/sba_YYYYMMDD_HHMMSS.db` (last 7)
-- Замки: `~/.sba/locks/inbox_v2.lock`, `legacy_v2.lock`
+- Замки: `~/.sba/locks/inbox_v2.lock`, `legacy_v2.lock`, `finance_v2.lock`, `fin_remind_v2.lock`
 
 ## Установка после изменений
 
@@ -65,6 +70,8 @@ cd ~/Desktop/second-brain-agent-v2
 .venv/bin/sba inbox          # inbox вручную
 .venv/bin/sba legacy         # legacy вручную
 .venv/bin/sba digest         # дайджест вручную
+.venv/bin/sba finance        # квартальный финансовый отчёт вручную
+.venv/bin/sba fin-remind     # ежедневные напоминания вручную
 .venv/bin/sba service install all
 .venv/bin/sba service status
 .venv/bin/sba service logs bot
@@ -77,6 +84,36 @@ cd ~/Desktop/second-brain-agent-v2
 - Tool handlers: `async def handler(args: dict) -> {"content": [{"type": "text", "text": "..."}]}`
 - SDK запускает Claude Code CLI как subprocess → нельзя вложенно из Claude Code сессии
 - Module-level globals `_db`, `_notifier`, `_config` — injected via `setup()`
+
+## Finance модуль
+
+### Новые таблицы БД (db.py)
+- `fin_accounts` — счета (kaspi_main, kaspi_second, freedom, halyk, rbk, kaspi_business)
+- `fin_transactions` — все транзакции (amount, category, label, source)
+- `fin_liabilities` — обязательства (кредиты, долги людям)
+- `fin_zakat_profile` — профиль закята (year_start, hawl_start)
+- `fin_recurring` — регулярные платежи (day_of_month=0 → ежедневно)
+
+### Новые инструменты агента (agent.py)
+- `finance_get_balance` — баланс счетов
+- `finance_add_transaction` — добавить расход/доход
+- `finance_update_account` — обновить остаток на счёте
+- `finance_manage_liability` — добавить/обновить/закрыть долг/кредит
+- `finance_get_zakat` — статус закята (расчёт через Yahoo Finance GC=F + KZT=X)
+- `finance_get_summary` — сводка за период
+- `finance_manage_recurring` — управление регулярными платежами
+- `finance_list_recurring` — список регулярных платежей
+
+### Псевдонимы счетов (finance.py)
+ACCOUNT_ALIASES: "каспи", "kaspi" → kaspi_main; "второй каспи", "второй счёт" → kaspi_second; "халык" → halyk; "фридом" → freedom; "рбк", "tayyab" → rbk; "каспи бизнес" → kaspi_business
+
+### Расчёт закята
+- Нисаб = 85г × цена золота (GC=F через Yahoo Finance) × курс USD/KZT (KZT=X)
+- Зakat обязателен если net_assets ≥ nisab (≈ 5.8 млн ₸ на март 2026)
+- Текущий статус: закят НЕ обязателен (долги превышают активы)
+
+### Регулярные платежи (seeded)
+17 записей: подписки (Apple, Google, YouTube, Telegram, Perplexity, Grok, Claude), Kaspi-кредиты (тренажёрка, импланты), ОтбасыБанк депозит, ИП, коммуналка, интернет, Аниса-математика, бензин, садака (ежедневно 100₸)
 
 ## Иерархическая индексация Drive (legacy)
 
@@ -96,7 +133,8 @@ cd ~/Desktop/second-brain-agent-v2
 - `set_folder_status(source, source_id, status)`, `set_folder_status_by_id(reg_id, status)`, `get_file_by_id(reg_id)`
 - `get_folders_by_status(status)` → `list`
 - `get_entry_type(source, source_id)` → `Optional[str]`
-- `upsert_file` — добавлен `entry_type: str = "file"`, UPDATE ветка включает `type=?`
+- `upsert_file` — добавлен `entry_type: str = "file"`, UPDATE ветка включает `type=?`; не сбрасывает статус `pending` (файлы в ожидании удаления не повторно обрабатываются)
+- `mark_deletion_executed` — UPDATE только если `status='confirmed'`; защита от race condition при отмене
 
 ## DB — методы для pending_deletions (db.py)
 

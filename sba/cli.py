@@ -22,6 +22,14 @@ import click
 import yaml
 
 
+_REQUIRED_KEYS = [
+    ("anthropic", "api_key"),
+    ("telegram_bot", "token"),
+    ("owner", "telegram_chat_id"),
+    ("google_drive", "inbox_folder_id"),
+]
+
+
 def _load_config() -> dict:
     config_path = Path.home() / ".sba" / "config.yaml"
     if not config_path.exists():
@@ -29,6 +37,10 @@ def _load_config() -> dict:
         sys.exit(1)
     with open(config_path) as f:
         config = yaml.safe_load(f) or {}
+    # Warn about missing required keys
+    for section, key in _REQUIRED_KEYS:
+        if not config.get(section, {}).get(key):
+            click.echo(f"⚠️  Config: [{section}].{key} не задан — часть функций недоступна", err=True)
     # Run DB migrations on every startup
     from sba.db import init_db_sync, get_db_path
     init_db_sync(get_db_path(config))
@@ -99,6 +111,26 @@ def digest() -> None:
     from sba import digest_agent
     notifier = Notifier(config)
     asyncio.run(digest_agent.run_digest(notifier=notifier, config=config))
+
+
+# ── finance ───────────────────────────────────────────────────────────────────
+
+@cli.command("fin-remind")
+def fin_remind() -> None:
+    """Run daily finance reminders check manually."""
+    config = _load_config()
+    _setup_logging(config)
+    from sba import fin_remind_processor
+    asyncio.run(fin_remind_processor.run(config))
+
+
+@cli.command()
+def finance() -> None:
+    """Run quarterly finance report manually."""
+    config = _load_config()
+    _setup_logging(config)
+    from sba import finance_processor
+    asyncio.run(finance_processor.run(config))
 
 
 # ── check ─────────────────────────────────────────────────────────────────────
@@ -196,7 +228,7 @@ def service() -> None:
 
 
 @service.command("install")
-@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "all"]))
+@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "finance", "fin_remind", "all"]))
 def service_install(daemon: str) -> None:
     """Install launchd plist(s)."""
     config = _load_config()
@@ -208,7 +240,7 @@ def service_install(daemon: str) -> None:
 
 
 @service.command("uninstall")
-@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "all"]))
+@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "finance", "fin_remind", "all"]))
 def service_uninstall(daemon: str) -> None:
     """Uninstall launchd plist(s)."""
     from sba.service_manager import uninstall_daemon, DAEMONS
@@ -228,7 +260,7 @@ def service_status() -> None:
 
 
 @service.command("logs")
-@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest"]))
+@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "finance", "fin_remind"]))
 @click.option("-n", default=40, help="Last N lines")
 def service_logs(daemon: str, n: int) -> None:
     """Tail daemon log."""

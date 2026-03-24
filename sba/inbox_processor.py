@@ -75,6 +75,7 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
         logger.error(f"Google Drive auth failed: {e}")
+        await notifier.send_message(f"⚠️ <b>Google Drive авторизация провалилась</b>\nЗапусти <code>sba auth google</code>\n\n{e}")
         stats["errors"] += 1
         return
 
@@ -164,6 +165,7 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
         logger.error(f"Google Drive auth failed (inbox folder scan): {e}")
+        await notifier.send_message(f"⚠️ <b>Google Drive авторизация провалилась</b> (inbox scan)\nЗапусти <code>sba auth google</code>\n\n{e}")
         stats["errors"] += 1
         return
 

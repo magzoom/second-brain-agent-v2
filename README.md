@@ -3,7 +3,7 @@
 > A personal AI agent for macOS that runs in the background and talks to you via Telegram.
 > Send a message in plain text — it creates tasks, searches your notes, organizes files, and delivers a morning briefing every day.
 
-Built on **[Claude Agent SDK](https://github.com/anthropics/claude-code)** (Anthropic) with 3 specialized agents and 4 background daemons.
+Built on **[Claude Agent SDK](https://github.com/anthropics/claude-code)** (Anthropic) with 3 specialized agents and 6 background daemons.
 
 ---
 
@@ -57,7 +57,7 @@ You (Telegram)  ──▶  Main Agent (Claude)
 | Messaging | Telegram Bot API (aiogram 3.x) |
 | Telegram reader | Telethon (userbot for channel reading) |
 | Database | SQLite with FTS5 full-text search |
-| Scheduler | macOS launchd (4 background daemons) |
+| Scheduler | macOS launchd (6 background daemons) |
 | Language | Python 3.12 |
 
 ---
@@ -88,6 +88,10 @@ No commands needed — just plain text:
 | `research the topic of AI in healthcare` | Launches Research Agent: web search + personal base |
 | `save this link` | Creates a note in Apple Notes |
 | *(forward a file or photo)* | Uploads to Google Drive Inbox for processing |
+| `сколько на счетах?` | Shows balance across all accounts |
+| `потратил 5000 на бензин` | Logs a transaction in the finance module |
+| `статус закята` | Calculates zakat status (nisab via live gold price) |
+| `добавь долг Нурлан 777000` | Adds a liability to track |
 
 Technical commands: `/status` (DB stats), `/log` (last 20 log lines)
 
@@ -230,10 +234,12 @@ Expected output:
 .venv/bin/sba inbox               # run inbox processor manually
 .venv/bin/sba legacy              # run legacy processor manually
 .venv/bin/sba digest              # run morning digest manually
+.venv/bin/sba finance             # run quarterly finance report manually
+.venv/bin/sba fin-remind          # run daily payment reminders manually
 
 .venv/bin/sba backup              # backup database
 
-.venv/bin/sba service install all      # install all 4 daemons
+.venv/bin/sba service install all      # install all 6 daemons
 .venv/bin/sba service uninstall all    # remove all daemons
 .venv/bin/sba service status           # show daemon status
 .venv/bin/sba service logs bot         # tail bot log
@@ -245,13 +251,16 @@ Expected output:
 
 ```
 sba/
-├── agent.py              # Main Agent — Claude SDK orchestrator
+├── agent.py              # Main Agent — Claude SDK orchestrator (GTD + Finance tools)
 ├── digest_agent.py       # Digest Agent — morning briefing
 ├── inbox_processor.py    # Inbox daemon — runs at 08:00, 12:00, 15:00, 18:00, 21:00
 ├── legacy_processor.py   # Legacy daemon — indexes archive + Goal Tracker
+├── finance_processor.py  # Finance daemon — quarterly report (Jan/Apr/Jul/Oct 1st)
+├── fin_remind_processor.py # Finance reminders daemon — daily at 08:00
+├── finance.py            # Zakat calc, account aliases, gold price (Yahoo Finance)
 ├── lock.py               # Shared fcntl process lock
 ├── cli.py                # CLI entry point (Click)
-├── db.py                 # SQLite + FTS5 knowledge base
+├── db.py                 # SQLite + FTS5 knowledge base + fin_* tables
 ├── notifier.py           # Telegram send helpers
 ├── service_manager.py    # launchd plist generator
 ├── bot/
