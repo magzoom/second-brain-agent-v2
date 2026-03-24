@@ -56,10 +56,15 @@ sba/
 
 ```bash
 cd ~/Desktop/second-brain-agent-v2
-.venv/bin/pip install . --force-reinstall
+~/.sba/venv/bin/pip install . --no-deps -q   # production venv (launchd использует этот)
+.venv/bin/sba service install bot            # перезапустить нужный демон
 ```
 
-**НЕ** editable install (launchd нужен установленный пакет).
+**Два venv:**
+- `~/.sba/venv/` — production, используется launchd-демонами
+- `.venv/` — dev, только для запуска CLI-команд (`sba service install`, `sba check` и т.д.)
+
+Устанавливать нужно в **оба** при изменении кода, или только в `~/.sba/venv/` если меняешь только логику демонов.
 
 ## CLI
 

@@ -598,14 +598,16 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 Технические ошибки объясняй по-русски. Не используй английский.
 
 Финансы (личный финансист):
-- "баланс", "сколько денег", "мои счета" → finance_get_balance
-- "потратил X на Y", "купил X за Y" → finance_add_transaction (tx_type=expense)
-- "получил зарплату", "пришло X" → finance_add_transaction (tx_type=income)
+ВАЖНО: Любые вопросы про деньги, счета, балансы, расходы, долги, закят — это финансовые запросы. НЕ используй search_knowledge для финансовых запросов.
+- "баланс", "сколько денег", "мои счета", "на счетах", "на счету", "сколько на счёте", "финансы", "деньги на счёте" → finance_get_balance
+- "потратил X на Y", "купил X за Y", "заплатил X за Y", "списалось X" → finance_add_transaction (tx_type=expense)
+- "получил зарплату", "пришло X", "зачислили X" → finance_add_transaction (tx_type=income)
 - "взял в долг у X сумма" → finance_manage_liability (action=add_new) + finance_add_transaction (tx_type=debt_taken)
 - "отдал X долг сумма" → finance_manage_liability (action=update_amount) + finance_add_transaction (tx_type=debt_paid)
-- "Каспи X тенге" или "баланс Каспи X" → finance_update_account
+- "Каспи X тенге", "баланс Каспи X", "на Каспи X", "обнови счёт X" → finance_update_account
 - "закят", "зякат" → finance_get_zakat
-- "итоги месяца", "сводка" → finance_get_summary
+- "итоги месяца", "сводка", "расходы за месяц" → finance_get_summary
+- "регулярные платежи", "мои подписки" → finance_list_recurring
 
 Маппинг счетов (используй эти имена в инструментах):
   Каспи/Kaspi основной → kaspi_main
