@@ -19,7 +19,7 @@ from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-SBA_VENV = Path.home() / "Desktop" / "second-brain-agent-v2" / ".venv"
+SBA_VENV = Path.home() / ".sba" / "venv"
 SBA_PYTHON = SBA_VENV / "bin" / "python3.12"
 SBA_EXE = SBA_VENV / "bin" / "sba"
 LOG_DIR = Path.home() / ".sba" / "logs"

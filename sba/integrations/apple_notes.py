@@ -139,10 +139,14 @@ if (targetFolder) {{
 }}
 JSON.stringify(result);
 """
-    result = subprocess.run(
-        ["osascript", "-l", "JavaScript", "-e", jxa_script],
-        capture_output=True, text=True, timeout=120,
-    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", jxa_script],
+            capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Apple Notes folder '{folder_name}' timed out — skipping this run")
+        return []
     if result.returncode != 0:
         logger.error(f"Failed to read Notes folder '{folder_name}': {result.stderr.strip()}")
         return []

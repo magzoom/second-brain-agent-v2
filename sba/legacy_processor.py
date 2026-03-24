@@ -317,12 +317,13 @@ async def _scan_folder(
     """Scan one folder: send decisions for unclassified subfolders. Files are not processed."""
     # Skip folders the user has acknowledged or fully processed
     own_status = await db.get_folder_status("gdrive", folder_id)
-    if own_status == "folder_done":
+    if own_status in ("folder_done", "folder_summary"):
         return
 
     items = await asyncio.to_thread(lambda: list(_list(service, folder_id, False)))
 
     subfolders = [i for i in items if i.get("mimeType") == FOLDER_MIME]
+    subfolders = [i for i in subfolders if not i.get("name", "").startswith(".")]
     files = [i for i in items if i.get("mimeType") != FOLDER_MIME]
 
     # ── Subfolders: send decision or recurse into pending_deep ──────────────
