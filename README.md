@@ -25,22 +25,31 @@ You (Telegram)  ──▶  Main Agent (Claude)
                     (knowledge base)
 ```
 
-**Every morning at 09:00** → Digest Agent sends a briefing:
-- Tasks due today from Google Tasks
-- Top posts from your Telegram channels (via Telethon)
-- Categorized news: geopolitics, AI, local news, humor, health
-
 **At 08:00, 12:00, 15:00, 18:00, 21:00** → Inbox processor:
 - Picks up new files from Google Drive Inbox
 - Picks up new notes from Apple Notes Inbox
 - Classifies each item: action / archive / delete
 
-**Every day at 09:10** → Legacy processor:
+**Every day at 08:00** → Finance reminders:
+- Checks recurring payments due today or overdue
+- Sends a reminder to Telegram with the amount and due date
+
+**Every day at 09:00** → Legacy processor:
 - Walks Google Drive top-down, sends folder decision buttons to Telegram (📂 Deeper / 📝 Summary)
 - On "Summary": AI generates a markdown description from file names, saves `_sba_summary.md` in Drive, indexes in FTS5
 - On "Deeper": descends into subfolders on the next run (up to `legacy_folders_per_run` decisions per run)
 - Posts completed tasks to your Goal Tracker Diary Telegram channel
 - Rolls over overdue tasks to today
+
+**Every day at 09:15** → Digest Agent sends a briefing:
+- Tasks due today from Google Tasks
+- Top posts from your Telegram channels (via Telethon)
+- Categorized news: geopolitics, AI, local news, humor, health
+
+**Quarterly (Jan/Apr/Jul/Oct 1st at 09:30)** → Finance report:
+- Balance across all accounts and liabilities
+- Net assets vs. nisab threshold
+- Zakat status with live gold price (Yahoo Finance)
 
 ---
 
@@ -88,10 +97,10 @@ No commands needed — just plain text:
 | `research the topic of AI in healthcare` | Launches Research Agent: web search + personal base |
 | `save this link` | Creates a note in Apple Notes |
 | *(forward a file or photo)* | Uploads to Google Drive Inbox for processing |
-| `сколько на счетах?` | Shows balance across all accounts |
-| `потратил 5000 на бензин` | Logs a transaction in the finance module |
-| `статус закята` | Calculates zakat status (nisab via live gold price) |
-| `добавь долг Нурлан 777000` | Adds a liability to track |
+| `how much is on my accounts?` | Shows balance across all accounts |
+| `spent 5000 on gas` | Logs a transaction in the finance module |
+| `zakat status` | Calculates zakat status (nisab via live gold price) |
+| `add debt John 777000` | Adds a liability to track |
 
 Technical commands: `/status` (DB stats), `/log` (last 20 log lines)
 
