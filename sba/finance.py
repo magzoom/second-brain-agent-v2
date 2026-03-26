@@ -22,17 +22,28 @@ ACCOUNT_ALIASES: dict[str, str] = {
     "основной":      "account_main",
     "main":          "account_main",
     "account_main":  "account_main",
+    "kaspi":         "account_main",
+    "каспи":         "account_main",
+    "kaspi main":    "account_main",
     # account_2
     "второй":        "account_2",
     "second":        "account_2",
     "второй счёт":   "account_2",
     "account_2":     "account_2",
+    "kaspi second":  "account_2",
+    "второй каспи":  "account_2",
     # account_3
     "account_3":     "account_3",
+    "freedom":       "account_3",
+    "фридом":        "account_3",
     # account_4
     "account_4":     "account_4",
+    "halyk":         "account_4",
+    "халык":         "account_4",
     # account_5
     "account_5":     "account_5",
+    "rbk":           "account_5",
+    "рбк":           "account_5",
     # account_biz
     "бизнес":        "account_biz",
     "business":      "account_biz",
