@@ -331,7 +331,7 @@ async def _finance_get_balance_tool(args: dict) -> dict:
 @tool("finance_add_transaction", "Добавить доход или расход.", {
     "type": "object",
     "properties": {
-        "account":     {"type": "string", "description": "Название счёта (kaspi_main, kaspi_second, freedom, halyk, rbk, kaspi_business)"},
+        "account":     {"type": "string", "description": "Название счёта (account_main, account_2, account_3, account_4, account_5, account_biz)"},
         "amount":      {"type": "number",  "description": "Сумма (всегда положительная)"},
         "tx_type":     {"type": "string",  "description": "income, expense, debt_taken, debt_paid"},
         "category":    {"type": "string",  "description": "Категория (еда, кафе, транспорт, коммуналка, зарплата и т.д.)"},
@@ -360,7 +360,7 @@ async def _finance_add_transaction_tool(args: dict) -> dict:
 @tool("finance_update_account", "Обновить баланс счёта (пользователь сообщил актуальный баланс).", {
     "type": "object",
     "properties": {
-        "account":     {"type": "string", "description": "Название счёта (kaspi_main, kaspi_second, freedom, halyk, rbk, kaspi_business)"},
+        "account":     {"type": "string", "description": "Название счёта (account_main, account_2, account_3, account_4, account_5, account_biz)"},
         "new_balance": {"type": "number", "description": "Новый баланс в тенге"},
         "note":        {"type": "string", "description": "Комментарий (опционально)"},
     },
@@ -375,7 +375,7 @@ async def _finance_update_account_tool(args: dict) -> dict:
     note = args.get("note", "")
     acc = await _db.fin_get_account(account)
     if not acc:
-        return _ok(f"Счёт '{account}' не найден. Доступные: kaspi_main, kaspi_second, freedom, halyk, rbk, kaspi_business")
+        return _ok(f"Счёт '{account}' не найден. Доступные: account_main, account_2, account_3, account_4, account_5, account_biz")
     old = acc["balance"]
     await _db.fin_update_balance(account, new_balance, note)
     diff = new_balance - old
@@ -610,12 +610,12 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 - "регулярные платежи", "мои подписки" → finance_list_recurring
 
 Маппинг счетов (используй эти имена в инструментах):
-  Каспи/Kaspi основной → kaspi_main
-  Каспи второй/второй счёт → kaspi_second
-  Freedom/Фридом → freedom
-  Halyk/Халык → halyk
-  RBK/Tayyab → rbk
-  Kaspi Business → kaspi_business
+  основной / main → account_main
+  второй / second / второй счёт → account_2
+  счёт 3 / account_3 → account_3
+  счёт 4 / account_4 → account_4
+  счёт 5 / account_5 → account_5
+  бизнес / business → account_biz
 
 Маппинг обязательств:
   долги людям → people_debt

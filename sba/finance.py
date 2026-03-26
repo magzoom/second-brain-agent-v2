@@ -15,33 +15,22 @@ logger = logging.getLogger(__name__)
 NISAB_GOLD_GRAMS = 85.0
 TROY_OZ_TO_GRAM = 31.1035
 
-# Maps user phrases (lowercased) to internal account names
+# Maps user phrases (lowercased) to internal account names.
+# Customize these for your own bank/account names.
 ACCOUNT_ALIASES: dict[str, str] = {
-    "kaspi":             "kaspi_main",
-    "каспи":             "kaspi_main",
-    "kaspi main":        "kaspi_main",
-    "kaspi основной":    "kaspi_main",
-    "kaspi_main":        "kaspi_main",
-    "kaspi second":      "kaspi_second",
-    "kaspi второй":      "kaspi_second",
-    "kaspi_second":      "kaspi_second",
-    "второй каспи":      "kaspi_second",
-    "второй счёт":       "kaspi_second",
-    "freedom":           "freedom",
-    "фридом":            "freedom",
-    "freedom bank":      "freedom",
-    "фридом банк":       "freedom",
-    "halyk":             "halyk",
-    "халык":             "halyk",
-    "halyk bank":        "halyk",
-    "халык банк":        "halyk",
-    "rbk":               "rbk",
-    "tayyab":            "rbk",
-    "таyyab":            "rbk",
-    "рбк":               "rbk",
-    "kaspi business":    "kaspi_business",
-    "каспи бизнес":      "kaspi_business",
-    "kaspi_business":    "kaspi_business",
+    "основной":      "account_main",
+    "main":          "account_main",
+    "account_main":  "account_main",
+    "второй":        "account_2",
+    "second":        "account_2",
+    "второй счёт":   "account_2",
+    "account_2":     "account_2",
+    "account_3":     "account_3",
+    "account_4":     "account_4",
+    "account_5":     "account_5",
+    "бизнес":        "account_biz",
+    "business":      "account_biz",
+    "account_biz":   "account_biz",
 }
 
 LIABILITY_ALIASES: dict[str, str] = {

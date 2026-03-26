@@ -211,12 +211,12 @@ def _create_tables(conn: sqlite3.Connection) -> None:
 
     # Seed initial finance data (idempotent via INSERT OR IGNORE)
     _accounts = [
-        ("kaspi_main",     "Kaspi (основной)",    0.0),
-        ("kaspi_second",   "Kaspi (второй счёт)", 0.0),
-        ("freedom",        "Freedom Bank",         0.0),
-        ("halyk",          "Halyk Bank",            0.0),
-        ("rbk",            "RBK/Tayyab",            0.0),
-        ("kaspi_business", "Kaspi Business",        0.0),
+        ("account_main",  "Основной счёт",  0.0),
+        ("account_2",     "Второй счёт",    0.0),
+        ("account_3",     "Счёт 3",         0.0),
+        ("account_4",     "Счёт 4",         0.0),
+        ("account_5",     "Счёт 5",         0.0),
+        ("account_biz",   "Бизнес счёт",    0.0),
     ]
     for n, l, b in _accounts:
         conn.execute(

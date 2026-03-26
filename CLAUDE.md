@@ -110,7 +110,7 @@ cd ~/Desktop/second-brain-agent-v2
 - `finance_list_recurring` — список регулярных платежей
 
 ### Псевдонимы счетов (finance.py)
-ACCOUNT_ALIASES: "каспи", "kaspi" → kaspi_main; "второй каспи", "второй счёт" → kaspi_second; "халык" → halyk; "фридом" → freedom; "рбк", "tayyab" → rbk; "каспи бизнес" → kaspi_business
+ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "second" → account_2; "бизнес", "business" → account_biz. Настраиваются под свои банки.
 
 ### Расчёт закята
 - Нисаб = 85г × цена золота (GC=F через Yahoo Finance) × курс USD/KZT (KZT=X)
