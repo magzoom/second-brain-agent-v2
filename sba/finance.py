@@ -16,18 +16,24 @@ NISAB_GOLD_GRAMS = 85.0
 TROY_OZ_TO_GRAM = 31.1035
 
 # Maps user phrases (lowercased) to internal account names.
-# Customize these for your own bank/account names.
+# Customize these for your own banks — add any phrases you use naturally.
 ACCOUNT_ALIASES: dict[str, str] = {
+    # account_main
     "основной":      "account_main",
     "main":          "account_main",
     "account_main":  "account_main",
+    # account_2
     "второй":        "account_2",
     "second":        "account_2",
     "второй счёт":   "account_2",
     "account_2":     "account_2",
+    # account_3
     "account_3":     "account_3",
+    # account_4
     "account_4":     "account_4",
+    # account_5
     "account_5":     "account_5",
+    # account_biz
     "бизнес":        "account_biz",
     "business":      "account_biz",
     "account_biz":   "account_biz",
