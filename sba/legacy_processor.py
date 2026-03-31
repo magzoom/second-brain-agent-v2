@@ -42,7 +42,7 @@ async def run(config: dict) -> None:
     limit_notes = int(schedule.get("legacy_limit_notes", 3))
 
     cost_log: list = []
-    stats = {"processed": 0, "actions": 0, "deletions": 0, "errors": 0, "folders_decided": 0, "cost_log": cost_log}
+    stats = {"processed": 0, "actions": 0, "deletions": 0, "errors": 0, "folders_decided": 0, "cost_log": cost_log, "auth_failed": False}
 
     try:
         async with Database(db_path) as db:
@@ -51,6 +51,8 @@ async def run(config: dict) -> None:
             await _rollover_overdue_tasks(config)
             await _goal_tracker(db, notifier, config)
             await _process_gdrive_legacy(db, notifier, config, stats)
+            if stats["auth_failed"]:
+                return
             await _process_apple_notes_legacy(db, notifier, config, stats, limit_notes)
 
     except Exception as e:
@@ -280,8 +282,8 @@ async def _process_gdrive_legacy(
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
         logger.error(f"Google Drive auth failed: {e}")
-        await notifier.send_message(f"⚠️ <b>Google Drive авторизация провалилась</b> (legacy)\nЗапусти <code>sba auth google</code>\n\n{e}")
-        stats["errors"] += 1
+        await notifier.send_message(f"⚠️ <b>Google Drive авторизация провалилась</b> (legacy)\nЗапусти <code>sba auth google</code>\nПосле авторизации запусти вручную: <code>cd ~/Desktop/second-brain-agent-v2 &amp;&amp; CLAUDECODE=\"\" .venv/bin/sba legacy</code>\nИли подожди до 09:00 — запустится автоматически.\n\n{e}")
+        stats["auth_failed"] = True
         return
 
     folders_per_run = int(config.get("schedule", {}).get("legacy_folders_per_run", 5))

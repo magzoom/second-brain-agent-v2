@@ -159,9 +159,11 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - fcntl lock: `LOCK_EX | LOCK_NB` — OS auto-release при краше
 - Goal Tracker: JXA batch reads → Haiku трансформирует → постит в канал
 - FTS5: `tokenize='unicode61'` для русского текста
-- Digest: MAX_POSTS=60, max_turns=15, parse_mode=HTML (не markdown); fallback отправляет msg.result если send_digest не был вызван; окно Telegram-постов 16ч; показываются ВСЕ задачи на сегодня + просроченные, ⚠️ если due < today
+- Digest: MAX_POSTS=35, MAX_PER_CHANNEL=2, msg.text[:120], max_turns=3, parse_mode=HTML (не markdown); fallback отправляет msg.result если send_digest не был вызван; окно Telegram-постов 16ч; показываются ВСЕ задачи на сегодня + просроченные, ⚠️ если due < today
 - Медиа-уведомления: кнопка "Ознакомлен" → `media_ack:{reg_id}` callback → `folder_done`; `_scan_folder` делает early return если own status == `folder_done`
 - `send_legacy_report` не отправляется если `processed == 0 and errors == 0` (карточки папок уже отправлены индивидуально)
+- Legacy auth failure: при `invalid_grant` ставит `stats["auth_failed"]=True`, шлёт одно сообщение с инструкцией и останавливается (Apple Notes и итоговый отчёт не запускаются). После `sba auth google` нужен ручной запуск или ждать 09:00.
+- macOS Full Disk Access: оба python3.12 (symlink и реальный `/opt/homebrew/Frameworks/Python.framework/Versions/3.12/bin/python3.12`) должны быть включены в System Settings → Privacy → Full Disk Access
 - Вложенный запуск из Claude Code: `CLAUDECODE=""` перед командой (иначе SDK падает с "nested session")
 
 ## Контроль расходов (agent.py / inbox_processor.py / legacy_processor.py)

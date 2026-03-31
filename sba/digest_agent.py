@@ -69,8 +69,8 @@ async def _get_telegram_channel_posts_tool(args: dict[str, Any]) -> dict[str, An
 
         posts = []
         since = datetime.now() - timedelta(hours=hours_back)
-        MAX_POSTS = 60       # total posts cap
-        MAX_PER_CHANNEL = 3  # max posts from a single channel — ensures diversity
+        MAX_POSTS = 35       # total posts cap
+        MAX_PER_CHANNEL = 2  # max posts from a single channel — ensures diversity
 
         client = TelegramClient(session_path, api_id, api_hash)
         try:
@@ -96,7 +96,7 @@ async def _get_telegram_channel_posts_tool(args: dict[str, Any]) -> dict[str, An
                             username = getattr(channel.entity, "username", None)
                             posts.append({
                                 "channel": channel.name,
-                                "text": msg.text[:150],
+                                "text": msg.text[:120],
                                 "date": msg.date.isoformat(),
                                 "url": f"https://t.me/{username}/{msg.id}" if username else None,
                             })
@@ -235,7 +235,7 @@ async def _fetch_posts(config: dict, hours_back: int) -> str:
         return "Telegram userbot не настроен."
 
     since = datetime.now() - timedelta(hours=hours_back)
-    MAX_POSTS, MAX_PER_CHANNEL = 60, 3
+    MAX_POSTS, MAX_PER_CHANNEL = 35, 2
     posts = []
     # receive_updates=False — не обрабатывать входящие апдейты,
     # иначе Telethon выдаёт security errors на старых message ID и зависает
@@ -257,7 +257,7 @@ async def _fetch_posts(config: dict, hours_back: int) -> str:
                         username = getattr(channel.entity, "username", None)
                         posts.append({
                             "channel": channel.name,
-                            "text": msg.text[:150],
+                            "text": msg.text[:120],
                             "url": f"https://t.me/{username}/{msg.id}" if username else None,
                         })
                         channel_count += 1

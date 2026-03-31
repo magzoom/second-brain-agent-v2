@@ -328,12 +328,15 @@
         <td><code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">launchctl list | grep com.sba.bot</code> — должен быть PID.<br>Если нет: <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">.venv/bin/sba service install bot</code></td>
       </tr>
       <tr>
-        <td>Apple Notes зависают</td>
-        <td>System Settings → Privacy &amp; Security → Automation → разрешить python3.12 доступ к Notes</td>
+        <td>Apple Notes зависают / диалог «python3.12 would like to access data»</td>
+        <td>System Settings → Privacy &amp; Security → Automation → разрешить python3.12 доступ к Notes.<br>
+        Также: Full Disk Access → включить оба python3.12 (symlink и реальный бинарь).</td>
       </tr>
       <tr>
-        <td>Google Drive: ошибка авторизации</td>
-        <td>Удалить <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">~/.sba/google_token.json</code>, переавторизоваться</td>
+        <td>Google Drive: ошибка авторизации (invalid_grant)</td>
+        <td>Запустить <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">.venv/bin/sba auth google</code>.<br>
+        После авторизации inbox/fin_remind подхватят токен автоматически при следующем запуске.<br>
+        Legacy нужно запустить вручную: <code style="background:#f0f0f0;padding:2px 6px;border-radius:4px">CLAUDECODE="" .venv/bin/sba legacy</code> или ждать 09:00.</td>
       </tr>
       <tr>
         <td>Бот отвечает «что-то пошло не так»</td>
