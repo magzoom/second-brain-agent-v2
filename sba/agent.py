@@ -484,6 +484,33 @@ async def _finance_get_summary_tool(args: dict) -> dict:
     return _ok("\n".join(lines))
 
 
+@tool("finance_get_transactions", "Показать последние транзакции по счёту или все счета.", {
+    "type": "object",
+    "properties": {
+        "account": {"type": "string", "description": "Название счёта (основной, второй, kaspi, freedom и т.д.). Если не указан — все счета."},
+        "limit":   {"type": "integer", "description": "Сколько транзакций показать (default 15)", "default": 15},
+    },
+    "required": [],
+})
+async def _finance_get_transactions_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    from sba.finance import resolve_account
+    account_raw = args.get("account")
+    account = resolve_account(account_raw) if account_raw else None
+    limit = int(args.get("limit", 15))
+    rows = await _db.fin_get_recent_transactions(account=account, limit=limit)
+    if not rows:
+        return _ok("Транзакций не найдено.")
+    lines = [f"Последние {len(rows)} транзакций{f' ({account_raw})' if account_raw else ''}:"]
+    for r in rows:
+        sign = "+" if r["tx_type"] == "income" else "-"
+        acc = r.get("account") or "—"
+        desc = r.get("description") or r.get("category") or ""
+        lines.append(f"  {r['tx_date']}  {sign}{r['amount']:,.0f} ₸  [{acc}]  {desc}")
+    return _ok("\n".join(lines))
+
+
 @tool("finance_manage_recurring", "Добавить или удалить регулярное финансовое напоминание.", {
     "type": "object",
     "properties": {
@@ -558,6 +585,7 @@ _main_server = create_sdk_mcp_server(
         _finance_manage_liability_tool,
         _finance_get_zakat_tool,
         _finance_get_summary_tool,
+        _finance_get_transactions_tool,
         _finance_manage_recurring_tool,
         _finance_list_recurring_tool,
     ],
@@ -607,6 +635,7 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 - "Каспи X тенге", "баланс Каспи X", "на Каспи X", "обнови счёт X" → finance_update_account
 - "закят", "зякат" → finance_get_zakat
 - "итоги месяца", "сводка", "расходы за месяц" → finance_get_summary
+- "последние транзакции", "последние расходы", "что было по счёту", "с чего продолжить", "какая последняя транзакция" → finance_get_transactions
 - "регулярные платежи", "мои подписки" → finance_list_recurring
 
 Маппинг счетов (используй эти имена в инструментах):
@@ -694,6 +723,7 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__finance_manage_liability",
             "mcp__sba__finance_get_zakat",
             "mcp__sba__finance_get_summary",
+            "mcp__sba__finance_get_transactions",
             "mcp__sba__finance_manage_recurring",
             "mcp__sba__finance_list_recurring",
             "Task",  # для вызова Research Agent

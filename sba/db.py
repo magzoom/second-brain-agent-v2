@@ -775,6 +775,21 @@ class Database:
         expense = sum(r["total"] for r in rows if r["tx_type"] == "expense")
         return {"year": year, "month": month, "income": income, "expense": expense, "rows": rows}
 
+    async def fin_get_recent_transactions(self, account: str | None = None, limit: int = 20) -> list:
+        """Return recent transactions, optionally filtered by account."""
+        if account:
+            async with self._conn.execute(
+                "SELECT * FROM fin_transactions WHERE account=? ORDER BY tx_date DESC, id DESC LIMIT ?",
+                (account, limit),
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+        else:
+            async with self._conn.execute(
+                "SELECT * FROM fin_transactions ORDER BY tx_date DESC, id DESC LIMIT ?",
+                (limit,),
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+
     # ── Recurring reminders ───────────────────────────────────────────────────
 
     async def fin_get_recurring(self, active_only: bool = True) -> list:
