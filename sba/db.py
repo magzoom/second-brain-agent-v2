@@ -717,14 +717,23 @@ class Database:
         )
         await self._conn.commit()
 
-    async def fin_update_liability_amount(self, name: str, new_amount: float) -> bool:
+    async def fin_update_liability_amount(self, name: str, new_amount: float) -> tuple[bool, bool]:
+        """Returns (changed, closed). closed=True if liability was set to 0 and deactivated."""
+        if new_amount <= 0:
+            async with self._conn.execute(
+                "UPDATE fin_liabilities SET amount=0, is_active=0, updated_at=CURRENT_TIMESTAMP WHERE name=? AND is_active=1",
+                (name,),
+            ) as cur:
+                changed = cur.rowcount > 0
+            await self._conn.commit()
+            return changed, True
         async with self._conn.execute(
             "UPDATE fin_liabilities SET amount=?, updated_at=CURRENT_TIMESTAMP WHERE name=? AND is_active=1",
             (new_amount, name),
         ) as cur:
             changed = cur.rowcount > 0
         await self._conn.commit()
-        return changed
+        return changed, False
 
     async def fin_get_transactions(self, days: int = 30, account: Optional[str] = None) -> list:
         q = "SELECT * FROM fin_transactions WHERE tx_date >= date('now', ? || ' days')"

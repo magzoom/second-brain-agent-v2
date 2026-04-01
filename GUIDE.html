@@ -242,14 +242,25 @@
     <h2><span class="icon" style="background:#30d15820">💳</span> Личные финансы</h2>
     <p style="color:#6e6e73; margin-bottom:16px;">Все финансовые операции — через свободный текст в боте. Никаких форм.</p>
     <table>
-      <tr><th>Счёт</th><th>Псевдонимы (что написать боту)</th></tr>
-      <tr><td>kaspi_main</td><td>каспи, kaspi, основной</td></tr>
-      <tr><td>kaspi_second</td><td>второй счёт, второй каспи</td></tr>
-      <tr><td>kaspi_gold</td><td>gold, gold-счёт</td></tr>
-      <tr><td>otbasy</td><td>отбасы, otbasy</td></tr>
-      <tr><td>halyk</td><td>халык, halyk</td></tr>
-      <tr><td>cash</td><td>наличные, кэш</td></tr>
+      <tr><th>Счёт (внутренний ID)</th><th>Банк</th><th>Псевдонимы (что написать боту)</th></tr>
+      <tr><td>account_main</td><td>Kaspi (основной)</td><td>основной, kaspi, каспи</td></tr>
+      <tr><td>account_2</td><td>Kaspi (второй)</td><td>второй, second, второй каспи</td></tr>
+      <tr><td>account_3</td><td>Freedom Bank</td><td>freedom, фридом</td></tr>
+      <tr><td>account_4</td><td>Halyk Bank</td><td>halyk, халык</td></tr>
+      <tr><td>account_5</td><td>RBK / Tayyab</td><td>rbk, рбк</td></tr>
+      <tr><td>account_biz</td><td>Kaspi Business</td><td>бизнес, business</td></tr>
     </table>
+    <div style="margin-top:16px;">
+    <table>
+      <tr><th>Что написать боту</th><th>Что произойдёт</th></tr>
+      <tr><td>потратил 5000 на бензин</td><td>Записывает расход на account_main</td></tr>
+      <tr><td>какие последние расходы по каспи?</td><td>Показывает последние транзакции по счёту</td></tr>
+      <tr><td>оплата рассрочки 89960</td><td>Уменьшает долг kaspi_installment + записывает расход</td></tr>
+      <tr><td>вернул долг Нурлану 100000</td><td>Уменьшает остаток долга, при 0 — закрывает и поздравляет</td></tr>
+      <tr><td>взял в долг у Саята 200000</td><td>Добавляет новое обязательство</td></tr>
+      <tr><td>новая рассрочка 500000 на 12 месяцев</td><td>Создаёт новую строку в обязательствах</td></tr>
+    </table>
+    </div>
     <div style="margin-top:16px;">
     <table>
       <tr><th>Блок</th><th>Описание</th></tr>

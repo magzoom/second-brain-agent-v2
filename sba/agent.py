@@ -406,10 +406,12 @@ async def _finance_manage_liability_tool(args: dict) -> dict:
     amount = float(args.get("amount", 0))
 
     if action == "update_amount":
-        ok = await _db.fin_update_liability_amount(name, amount)
-        if ok:
-            return _ok(f"Остаток по '{name}' обновлён: {amount:,.0f} ₸")
-        return _ok(f"Обязательство '{name}' не найдено")
+        ok, closed = await _db.fin_update_liability_amount(name, amount)
+        if not ok:
+            return _ok(f"Обязательство '{name}' не найдено")
+        if closed:
+            return _ok(f"🎉 Поздравляю! Долг '{name}' полностью погашен и закрыт.")
+        return _ok(f"Остаток по '{name}' обновлён: {amount:,.0f} ₸")
     else:
         creditor = args.get("creditor", name)
         lib_type = args.get("lib_type", "personal")
@@ -632,6 +634,7 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 - "получил зарплату", "пришло X", "зачислили X" → finance_add_transaction (tx_type=income)
 - "взял в долг у X сумма" → finance_manage_liability (action=add_new) + finance_add_transaction (tx_type=debt_taken)
 - "отдал X долг сумма" → finance_manage_liability (action=update_amount) + finance_add_transaction (tx_type=debt_paid)
+- "оплата рассрочки", "заплатил рассрочку", "рассрочка Каспи сумма" → finance_manage_liability (action=update_amount, name=kaspi_installment, amount=текущий_остаток - сумма_платежа) + finance_add_transaction (tx_type=expense, category=кредиты)
 - "Каспи X тенге", "баланс Каспи X", "на Каспи X", "обнови счёт X" → finance_update_account
 - "закят", "зякат" → finance_get_zakat
 - "итоги месяца", "сводка", "расходы за месяц" → finance_get_summary

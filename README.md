@@ -99,8 +99,11 @@ No commands needed — just plain text:
 | *(forward a file or photo)* | Uploads to Google Drive Inbox for processing |
 | `how much is on my accounts?` | Shows balance across all accounts |
 | `spent 5000 on gas` | Logs a transaction in the finance module |
+| `what are the last expenses on main account?` | Shows recent transactions for an account |
+| `paid installment 89960` | Reduces installment debt and logs expense |
+| `paid back John 100000` | Reduces liability; auto-closes and congratulates when paid off |
 | `zakat status` | Calculates zakat status (nisab via live gold price) |
-| `add debt John 777000` | Adds a liability to track |
+| `add debt John 777000` | Adds a new liability to track |
 
 Technical commands: `/status` (DB stats), `/log` (last 20 log lines)
 

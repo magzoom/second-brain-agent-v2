@@ -93,7 +93,7 @@ cd ~/Desktop/second-brain-agent-v2
 ## Finance модуль
 
 ### Новые таблицы БД (db.py)
-- `fin_accounts` — счета (kaspi_main, kaspi_second, freedom, halyk, rbk, kaspi_business)
+- `fin_accounts` — счета (account_main=Kaspi основной, account_2=Kaspi второй, account_3=Freedom, account_4=Halyk, account_5=RBK/Tayyab, account_biz=Kaspi Business)
 - `fin_transactions` — все транзакции (amount, category, label, source)
 - `fin_liabilities` — обязательства (кредиты, долги людям)
 - `fin_zakat_profile` — профиль закята (year_start, hawl_start)
@@ -103,9 +103,10 @@ cd ~/Desktop/second-brain-agent-v2
 - `finance_get_balance` — баланс счетов
 - `finance_add_transaction` — добавить расход/доход
 - `finance_update_account` — обновить остаток на счёте
-- `finance_manage_liability` — добавить/обновить/закрыть долг/кредит
+- `finance_manage_liability` — добавить/обновить/закрыть долг/кредит. При остатке ≤ 0 автоматически ставит is_active=0 и поздравляет
 - `finance_get_zakat` — статус закята (расчёт через Yahoo Finance GC=F + KZT=X)
 - `finance_get_summary` — сводка за период
+- `finance_get_transactions` — последние транзакции по счёту или всем счетам
 - `finance_manage_recurring` — управление регулярными платежами
 - `finance_list_recurring` — список регулярных платежей
 
