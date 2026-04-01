@@ -312,7 +312,7 @@ sba/
 - Searches your personal knowledge base (FTS5)
 - Returns a synthesized answer
 
-**Digest Agent** (standalone, runs at 09:00):
+**Digest Agent** (standalone, runs at 09:15):
 - Gets tasks due today from Google Tasks
 - Reads last 24h posts from all your Telegram channels
 - Selects top items by category

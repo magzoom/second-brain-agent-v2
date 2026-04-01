@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import query, ClaudeAgentOptions, tool, create_sdk_mcp_server
+from claude_agent_sdk.types import ResultMessage
 
 logger = logging.getLogger(__name__)
 
@@ -344,8 +345,8 @@ async def run_digest(notifier, config: dict) -> None:
     last_result = None
     try:
         async for msg in query(prompt=prompt, options=options):
-            if hasattr(msg, "result"):
-                last_result = str(msg.result)
+            if isinstance(msg, ResultMessage):
+                last_result = msg.result or ""
                 logger.info(f"Digest completed: {last_result[:300]}")
     except Exception as e:
         logger.error(f"Digest agent failed: {e}", exc_info=True)
