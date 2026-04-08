@@ -232,8 +232,8 @@ async def handle_voice_input(message: Message, bot: Bot) -> None:
 # ── File / photo input ────────────────────────────────────────────────────────
 
 def _is_bank_statement(file_name: str, mime_type: str) -> bool:
-    """Return True if the file looks like a bank statement PDF."""
-    if mime_type != "application/pdf":
+    """Return True if the file looks like a bank statement (PDF or TXT)."""
+    if mime_type not in ("application/pdf", "text/plain"):
         return False
     fn = file_name.lower()
     return any(k in fn for k in _STATEMENT_KEYWORDS)
@@ -311,48 +311,47 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
         import base64
         import json
 
-        pdf_bytes = tmp_path.read_bytes()
-        pdf_b64 = base64.standard_b64encode(pdf_bytes).decode()
-
         account = _detect_account_from_filename(file_name)
         account_hint = f"\nСчёт из имени файла: {account}" if account else ""
         accounts_info = (
             "account_main=Kaspi основной, account_2=Kaspi Депозит, "
             "account_3=Freedom Bank, account_4=Halyk, account_5=RBK/Tayyab, account_biz=Kaspi Business"
         )
+        extraction_prompt = (
+            f"Извлеки все транзакции из этой банковской выписки.{account_hint}\n"
+            f"Счета: {accounts_info}\n\n"
+            "Верни ТОЛЬКО JSON массив без пояснений:\n"
+            '[{"tx_date":"2026-04-01","amount":5000.0,"tx_type":"expense",'
+            '"category":"еда","description":"Название операции","account":"account_main"},...]\n\n'
+            "Правила:\n"
+            "- tx_type: expense (расход), income (доход), transfer (перевод между своими счетами)\n"
+            "- Переводы между своими счетами → transfer\n"
+            "- Зарплата/поступления → income\n"
+            "- amount: всегда положительное число\n"
+            "- Категории: еда, транспорт, кафе, коммуналка, интернет, подписки, "
+            "здоровье, красота, одежда, развлечения, сбережения, кредиты, налоги, "
+            "дом, переводы людям, подарки, садака, разное"
+        )
 
         client = anthropic.Anthropic(api_key=_config.get("anthropic", {}).get("api_key", ""))
+        is_txt = file_name.lower().endswith(".txt")
+
+        if is_txt:
+            txt_content = tmp_path.read_text(errors="replace")[:30000]
+            content = [{"type": "text", "text": f"Выписка:\n\n{txt_content}\n\n{extraction_prompt}"}]
+        else:
+            pdf_bytes = tmp_path.read_bytes()
+            pdf_b64 = base64.standard_b64encode(pdf_bytes).decode()
+            content = [
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}},
+                {"type": "text", "text": extraction_prompt},
+            ]
+
         response = await asyncio.to_thread(
             client.messages.create,
             model="claude-haiku-4-5-20251001",
             max_tokens=4096,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "document",
-                        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Извлеки все транзакции из этой банковской выписки.{account_hint}\n"
-                            f"Счета: {accounts_info}\n\n"
-                            "Верни ТОЛЬКО JSON массив без пояснений:\n"
-                            '[{"tx_date":"2026-04-01","amount":5000.0,"tx_type":"expense",'
-                            '"category":"еда","description":"Название операции","account":"account_main"},...]\n\n'
-                            "Правила:\n"
-                            "- tx_type: expense (расход), income (доход), transfer (перевод между своими счетами)\n"
-                            "- Переводы между своими счетами → transfer\n"
-                            "- Зарплата/поступления → income\n"
-                            "- amount: всегда положительное число\n"
-                            "- Категории: еда, транспорт, кафе, коммуналка, интернет, подписки, "
-                            "здоровье, красота, одежда, развлечения, сбережения, кредиты, налоги, "
-                            "дом, переводы людям, подарки, садака, разное"
-                        ),
-                    },
-                ],
-            }],
+            messages=[{"role": "user", "content": content}],
         )
 
         raw = response.content[0].text.strip()
