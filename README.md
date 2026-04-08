@@ -33,6 +33,16 @@ You (Telegram)  ──▶  Main Agent (Claude)
 **Every day at 08:00** → Finance reminders:
 - Checks recurring payments due today or overdue
 - Sends a reminder to Telegram with the amount and due date
+- Saves a daily balance snapshot for all accounts
+
+**Every day at 21:00** → Evening finance check-in:
+- Reports how many transactions were logged today
+- Reminds to log any missed expenses/income
+
+**Every Sunday at 21:00** → Weekly forecast:
+- Upcoming fixed recurring payments until end of month
+- Estimated variable spending based on historical averages
+- Projected end-of-month balance
 
 **Every day at 09:00** → Legacy processor:
 - Walks Google Drive top-down, sends folder decision buttons to Telegram (📂 Deeper / 📝 Summary)
@@ -96,7 +106,8 @@ No commands needed — just plain text:
 | `find my notes about the project` | Full-text search across Google Drive + Apple Notes |
 | `research the topic of AI in healthcare` | Launches Research Agent: web search + personal base |
 | `save this link` | Creates a note in Apple Notes |
-| *(forward a file or photo)* | Uploads to Google Drive Inbox for processing |
+| *(forward a PDF/TXT bank statement)* | Parses transactions with Claude Haiku, shows preview with confirm/cancel |
+| *(forward any other file or photo)* | Uploads to Google Drive Inbox for processing |
 | `how much is on my accounts?` | Shows balance across all accounts |
 | `spent 5000 on gas` | Logs a transaction in the finance module |
 | `what are the last expenses on main account?` | Shows recent transactions for an account |
@@ -268,7 +279,7 @@ sba/
 ├── inbox_processor.py    # Inbox daemon — runs at 08:00, 12:00, 15:00, 18:00, 21:00
 ├── legacy_processor.py   # Legacy daemon — indexes archive + Goal Tracker
 ├── finance_processor.py  # Finance daemon — quarterly report (Jan/Apr/Jul/Oct 1st)
-├── fin_remind_processor.py # Finance reminders daemon — daily at 08:00
+├── fin_remind_processor.py # Finance reminders (08:00) + evening check-in (21:00) + Sunday forecast
 ├── finance.py            # Zakat calc, account aliases, gold price (Yahoo Finance)
 ├── lock.py               # Shared fcntl process lock
 ├── cli.py                # CLI entry point (Click)

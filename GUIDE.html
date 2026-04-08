@@ -80,7 +80,7 @@
     <div class="status-item"><div class="dot"></div> com.sba.inbox — 08:00, 12:00, 15:00, 18:00, 21:00</div>
     <div class="status-item"><div class="dot"></div> com.sba.legacy — 09:00 ежедневно</div>
     <div class="status-item"><div class="dot"></div> com.sba.digest — 09:15 ежедневно</div>
-    <div class="status-item"><div class="dot"></div> com.sba.fin_remind — 08:00 ежедневно</div>
+    <div class="status-item"><div class="dot"></div> com.sba.fin_remind — 08:00 + 21:00 ежедневно</div>
     <div class="status-item"><div class="dot"></div> com.sba.finance — 1 янв/апр/июл/окт 09:30</div>
   </div>
 
@@ -113,6 +113,7 @@
       <tr><td>найди про [тема]</td><td>Поиск по FTS5 базе знаний (Google Drive + Apple Notes)</td></tr>
       <tr><td>изучи тему [тема]</td><td>Research Agent: интернет + личная база</td></tr>
       <tr><td>создай заметку [текст]</td><td>Новая заметка в Apple Notes в нужной категории</td></tr>
+      <tr><td>PDF/TXT выписка банка</td><td>Парсит транзакции через Claude Haiku, показывает превью с кнопками ✅/❌. Дубли пропускаются автоматически</td></tr>
       <tr><td>файл/фото</td><td>Загружает в Google Drive Inbox → обрабатывается при следующем inbox</td></tr>
       <tr><td>сколько на счетах?</td><td>Баланс всех счетов + чистые активы</td></tr>
       <tr><td>потратил 5000 на бензин</td><td>Фиксирует транзакцию в модуле финансов</td></tr>
@@ -226,8 +227,8 @@
       </div>
       <div class="daemon-card">
         <div class="name">com.sba.fin_remind</div>
-        <div class="desc">Напоминания о платежах</div>
-        <div class="schedule">Ежедневно в 08:00</div>
+        <div class="desc">Напоминания + чек-ин</div>
+        <div class="schedule">08:00 (платежи) + 21:00 (чек-ин)<br>Вс 21:00 — прогноз на неделю</div>
       </div>
       <div class="daemon-card">
         <div class="name">com.sba.finance</div>
@@ -264,7 +265,10 @@
     <div style="margin-top:16px;">
     <table>
       <tr><th>Блок</th><th>Описание</th></tr>
-      <tr><td>Регулярные платежи</td><td>Каждый день в 08:00 бот напоминает о платежах, срок которых сегодня (17 записей: подписки, кредиты, коммуналка, ИП)</td></tr>
+      <tr><td>Регулярные платежи</td><td>08:00 — напоминание о сегодняшних платежах + снапшот баланса всех счетов</td></tr>
+      <tr><td>Вечерний чек-ин</td><td>21:00 — сколько транзакций записано за день. Если 0 — напоминание внести расходы</td></tr>
+      <tr><td>Прогноз</td><td>Воскресенье 21:00 — фиксированные платежи до конца месяца + оценка переменных + прогноз остатка</td></tr>
+      <tr><td>Импорт выписок</td><td>Отправь PDF или TXT выписку банка прямо в бот — бот распознает транзакции, покажет превью и спросит подтверждение. Дубли пропускаются</td></tr>
       <tr><td>Квартальный отчёт</td><td>1 янв/апр/июл/окт: баланс счетов, обязательства, чистые активы, статус закята</td></tr>
       <tr><td>Закят</td><td>Нисаб = 85г × цена золота (GC=F) × курс USD/KZT. Автоматически через Yahoo Finance</td></tr>
     </table>

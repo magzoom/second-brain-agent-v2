@@ -13,7 +13,7 @@
 - `com.sba.legacy` — **09:00**, обработка накопленного + Goal Tracker (первым)
 - `com.sba.digest` — **09:15**, утренний брифинг (после legacy, читает актуальные задачи)
 - `com.sba.finance` — **1 янв/апр/июл/окт в 09:30**, квартальный финансовый отчёт + закят
-- `com.sba.fin_remind` — **08:00 ежедневно**, напоминания о регулярных платежах
+- `com.sba.fin_remind` — **08:00** (напоминания + снапшот) + **21:00** (вечерний чек-ин); **воскресенье 21:00** — дополнительно недельный прогноз
 
 ## Ключевые файлы
 
@@ -149,6 +149,36 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - `get_stale_pending_deletions(hours=20)` → `list` — просроченные `waiting` запросы
 - `update_stale_deletion_msg(deletion_id, new_msg_id)` — обновляет msg_id и сбрасывает `created_at`
 - Прямой доступ к `db._conn` вне `db.py` **запрещён** — все SQL-запросы только через методы класса
+
+## DB — finance методы (db.py)
+
+- `fin_add_transaction(account, amount, tx_type, category, description, tx_date)` — добавить транзакцию
+- `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — проверка дубля по 4 полям
+- `fin_get_today_transactions(today_str)` → `list` — все транзакции за дату
+- `fin_get_upcoming_recurring(today_day, days_in_month)` → `list` — платежи после сегодня до конца месяца
+- `fin_get_avg_variable_spend(excluded_categories: set)` → `float` — среднемесячные переменные расходы (last 2 months)
+- `fin_get_month_variable_spend(month_str, excluded_categories: set)` → `float` — переменные расходы за месяц
+- `fin_get_total_balance()` → `float` — сумма всех счетов
+- `fin_count_months_with_data()` → `int` — кол-во месяцев с данными (для оценки надёжности прогноза)
+- `fin_save_all_snapshots(source)` — снапшот всех счетов в `fin_balance_snapshots`
+- `cleanup_stale_new_files(source, days)` — перевести старые `new` в `skipped` (для gdrive)
+
+## Finance модуль — прогноз и чек-ин (fin_remind_processor.py)
+
+- **Утро 08:00**: снапшот + напоминания о сегодняшних платежах → отдельное сообщение
+- **Вечер 21:00**: чек-ин — сколько транзакций внесено за день, напоминание если 0
+- **Воскресенье 21:00**: дополнительно прогноз до конца месяца (фиксированные + переменные)
+- Исключаемые категории из прогноза: `переводы людям`, `подарки`, `долги`, `семья`
+- Прогноз требует минимум 1 месяц данных; с < 3 месяцев добавляет пометку «мало данных»
+
+## Парсинг банковских выписок (bot/handlers.py)
+
+- PDF и TXT файлы с ключевыми словами в имени (kaspi, выписка, halyk, freedom, депозит, statement) → автоматически маршрутизируются на парсинг вместо Drive
+- Парсинг через Claude Haiku API (~$0.02/файл, только при ручной отправке)
+- Показывает превью с кнопками `✅ Импортировать / ❌ Отмена`
+- Дубли проверяются по `(account, tx_date, amount, description)` — повторная загрузка той же выписки безопасна
+- Определение счёта по имени файла: gold/kaspi → account_main, депозит/d1000 → account_2, freedom → account_3, halyk → account_4
+- `_pending_statements: dict[chat_id, list]` — временное хранение до подтверждения
 
 ## Ключевые паттерны
 
