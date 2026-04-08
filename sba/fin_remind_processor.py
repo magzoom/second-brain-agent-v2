@@ -41,6 +41,12 @@ async def _run(config: dict) -> None:
     async with Database(db_path) as db:
         if is_evening:
             await _send_evening_checkin(db, notifier, today)
+            # Weekly forecast on Sunday evening
+            if today.weekday() == 6:
+                forecast = await _generate_weekly_forecast(db, today)
+                if forecast:
+                    await notifier.send_message(forecast)
+                    logger.info("Sent weekly forecast (Sunday evening)")
             return
 
         # ── Morning run ───────────────────────────────────────────────────────
@@ -68,12 +74,6 @@ async def _run(config: dict) -> None:
         else:
             logger.info("No recurring reminders due today")
 
-        # Weekly forecast every Monday — separate message
-        if today.weekday() == 0:
-            forecast = await _generate_weekly_forecast(db, today)
-            if forecast:
-                await notifier.send_message(forecast)
-                logger.info("Sent weekly forecast")
 
 
 async def _send_evening_checkin(db, notifier, today: date) -> None:
