@@ -1,4 +1,6 @@
 .venv/
+.venv.nosync/
+ideas/
 __pycache__/
 *.pyc
 *.pyo
