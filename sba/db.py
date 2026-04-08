@@ -928,6 +928,16 @@ class Database:
                     result.append(r)
         return result
 
+    async def fin_transaction_exists(self, account: str, tx_date: str, amount: float, description: str) -> bool:
+        """Return True if a transaction with same account/date/amount/description already exists."""
+        async with self._conn.execute(
+            """SELECT 1 FROM fin_transactions
+               WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01 AND description=?
+               LIMIT 1""",
+            (account, tx_date, amount, description),
+        ) as cur:
+            return await cur.fetchone() is not None
+
     async def fin_get_today_transactions(self, today_str: str) -> list:
         """Return all transactions for a specific date."""
         async with self._conn.execute(

@@ -423,7 +423,18 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
         await callback.message.edit_text("⏳ Импортирую...")
         from sba.db import Database, get_db_path
         async with Database(get_db_path(_config)) as db:
+            inserted = 0
+            skipped = 0
             for t in transactions:
+                is_dup = await db.fin_transaction_exists(
+                    account=t.get("account", "account_main"),
+                    tx_date=t.get("tx_date", ""),
+                    amount=float(t["amount"]),
+                    description=t.get("description", ""),
+                )
+                if is_dup:
+                    skipped += 1
+                    continue
                 await db.fin_add_transaction(
                     account=t.get("account", "account_main"),
                     amount=float(t["amount"]),
@@ -432,8 +443,11 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
                     description=t.get("description", ""),
                     tx_date=t.get("tx_date"),
                 )
+                inserted += 1
+
+        skip_note = f" ({skipped} дублей пропущено)" if skipped else ""
         await callback.message.edit_text(
-            f"✅ Импортировано {len(transactions)} операций.\n"
+            f"✅ Импортировано {inserted} операций{skip_note}.\n"
             "Если нужно — обнови остатки на счетах: напиши «баланс основного X»"
         )
     except Exception as e:

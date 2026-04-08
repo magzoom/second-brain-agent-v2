@@ -51,8 +51,6 @@ async def _run(config: dict) -> None:
         await db.fin_save_all_snapshots(source="auto")
         logger.info("Saved daily balance snapshots for all accounts")
 
-        parts = []
-
         if due:
             lines = [f"💳 <b>Регулярные платежи — {today.strftime('%d.%m.%Y')}</b>\n"]
             for item in due:
@@ -65,20 +63,17 @@ async def _run(config: dict) -> None:
                     days_left = item["day_of_month"] - today_day
                     day_str = f"через {days_left} дн. ({item['day_of_month']}-е)"
                 lines.append(f"• {item['label']}{amount_str} — {day_str}")
-            parts.append("\n".join(lines))
-            logger.info(f"Prepared {len(due)} recurring reminders")
+            await notifier.send_message("\n".join(lines))
+            logger.info(f"Sent {len(due)} recurring reminders")
         else:
             logger.info("No recurring reminders due today")
 
-        # Weekly forecast every Monday
+        # Weekly forecast every Monday — separate message
         if today.weekday() == 0:
             forecast = await _generate_weekly_forecast(db, today)
             if forecast:
-                parts.append(forecast)
-                logger.info("Added weekly forecast to morning message")
-
-        if parts:
-            await notifier.send_message("\n\n".join(parts))
+                await notifier.send_message(forecast)
+                logger.info("Sent weekly forecast")
 
 
 async def _send_evening_checkin(db, notifier, today: date) -> None:
