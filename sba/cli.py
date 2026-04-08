@@ -61,6 +61,11 @@ def _setup_logging(config: dict) -> None:
     root.addHandler(handler)
     root.addHandler(logging.StreamHandler(sys.stdout))
 
+    # Suppress noisy warnings from third-party libs
+    logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
+    logging.getLogger("googleapiclient.discovery").setLevel(logging.WARNING)
+    logging.getLogger("telethon.network.mtprotosender").setLevel(logging.ERROR)
+
 
 @click.group()
 def cli() -> None:
@@ -215,6 +220,14 @@ def auth_google() -> None:
         from sba.integrations.google_tasks import build_service
         build_service(config)
         click.echo("✅ Google authorized successfully (Drive + Tasks)")
+        # Clear auth error cooldown flags so next failure will notify again
+        from pathlib import Path
+        for flag in (Path.home() / ".sba" / "locks").glob("auth_error_*.flag"):
+            flag.unlink(missing_ok=True)
+        # Send Telegram confirmation
+        from sba.notifier import notify_sync
+        notify_sync(config, "✅ <b>Google авторизация восстановлена.</b>\nLegacy, Inbox и другие сервисы продолжат работу в штатном режиме.")
+        click.echo("📱 Telegram notification sent")
     except Exception as e:
         click.echo(f"❌ Authorization failed: {e}", err=True)
         sys.exit(1)

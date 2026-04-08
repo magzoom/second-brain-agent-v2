@@ -75,7 +75,8 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
         logger.error(f"Google Drive auth failed: {e}")
-        await notifier.send_message(f"⚠️ <b>Google Drive авторизация провалилась</b>\nЗапусти <code>sba auth google</code>\nПосле авторизации inbox подхватит токен автоматически при следующем запуске по расписанию.\n\n{e}")
+        from sba.notifier import notify_auth_error
+        await notify_auth_error(notifier, "Google Drive (inbox)", e)
         stats["errors"] += 1
         return
 
@@ -97,6 +98,9 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
             logger.error(f"Failed to get Drive changes: {e}")
             stats["errors"] += 1
         return
+
+    if len(changes) > 200:
+        logger.warning(f"Google Drive: large change batch ({len(changes)} files) — likely pageToken reset. inbox_folder_id filter is active.")
 
     inbox_folder_id = config.get("google_drive", {}).get("inbox_folder_id", "")
     limit_hit = False
@@ -126,7 +130,9 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
             path=file_info.get("webViewLink", ""),
         )
         if not is_new:
-            continue
+            status = await db.get_file_status(reg_id)
+            if status != "new":
+                continue
 
         if stats["processed"] >= stats.get("max", 20):
             limit_hit = True
@@ -165,7 +171,8 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
         logger.error(f"Google Drive auth failed (inbox folder scan): {e}")
-        await notifier.send_message(f"⚠️ <b>Google Drive авторизация провалилась</b> (inbox scan)\nЗапусти <code>sba auth google</code>\n\n{e}")
+        from sba.notifier import notify_auth_error
+        await notify_auth_error(notifier, "Google Drive (inbox scan)", e)
         stats["errors"] += 1
         return
 
@@ -199,7 +206,9 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
             path=file_info.get("webViewLink", ""),
         )
         if not is_new:
-            continue
+            status = await db.get_file_status(reg_id)
+            if status != "new":
+                continue
 
         content_text = ""
         try:

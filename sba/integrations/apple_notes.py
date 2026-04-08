@@ -157,6 +157,40 @@ JSON.stringify(result);
         return []
 
 
+def get_note_by_id(note_id: str) -> dict | None:
+    """Fetch a single note by its stable JXA ID (x-coredata://...).
+    Returns dict with id/title/content_text/folder, or None if not found.
+    """
+    safe_id = _escape_applescript(note_id)
+    jxa_script = f"""
+var app = Application("Notes");
+var notes = app.notes.whose({{id: "{safe_id}"}})();
+if (notes.length === 0) {{ JSON.stringify(null); }} else {{
+    var note = notes[0];
+    var folder = "Unknown";
+    try {{ folder = note.container().name(); }} catch(e) {{}}
+    JSON.stringify({{
+        id: note.id(),
+        title: note.name(),
+        content_text: note.plaintext(),
+        folder: folder
+    }});
+}}
+"""
+    try:
+        result = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", jxa_script],
+            capture_output=True, text=True, timeout=30,
+        )
+        raw = result.stdout.strip()
+        if not raw or raw == "null":
+            return None
+        return json.loads(raw)
+    except Exception as e:
+        logger.error(f"get_note_by_id failed for '{note_id}': {e}")
+        return None
+
+
 # ── Writing ───────────────────────────────────────────────────────────────────
 
 def create_note(title: str, body_html: str, folder: str = "Inbox") -> bool:

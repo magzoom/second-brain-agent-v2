@@ -206,6 +206,17 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             is_active       INTEGER NOT NULL DEFAULT 1,
             created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+
+        -- Daily balance snapshots
+        CREATE TABLE IF NOT EXISTS fin_balance_snapshots (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            account     TEXT NOT NULL,
+            balance     REAL NOT NULL,
+            snapshot_date DATE NOT NULL DEFAULT (date('now')),
+            source      TEXT NOT NULL DEFAULT 'auto',
+            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(account, snapshot_date)
+        );
     """)
 
 
@@ -382,6 +393,19 @@ class Database:
             (status, category, classification, file_id),
         )
         await self._conn.commit()
+
+    async def cleanup_stale_new_files(self, source: str, days: int = 7) -> int:
+        """Mark files stuck in 'new' status for >days as 'skipped'. Returns count."""
+        import time as _time
+        cutoff = _time.strftime("%Y-%m-%d %H:%M:%S", _time.gmtime(_time.time() - days * 86400))
+        async with self._conn.execute(
+            "UPDATE files_registry SET status='skipped' "
+            "WHERE source=? AND status='new' AND type='file' AND added_at < ?",
+            (source, cutoff),
+        ) as cur:
+            rows = cur.rowcount
+        await self._conn.commit()
+        return rows
 
     async def get_unprocessed_files(self, source: str = None, limit: int = 50) -> list:
         query = "SELECT * FROM files_registry WHERE status='new'"
@@ -665,6 +689,49 @@ class Database:
             (new_balance, account_name),
         )
         await self._conn.commit()
+        # Auto-save snapshot when user explicitly reports balance
+        await self.fin_save_snapshot(account_name, new_balance, source="user")
+
+    async def fin_save_snapshot(self, account: str, balance: float, snapshot_date: str = "", source: str = "auto") -> None:
+        """Save (or update) daily balance snapshot for an account."""
+        from datetime import date as _date
+        if not snapshot_date:
+            snapshot_date = _date.today().isoformat()
+        await self._conn.execute(
+            """INSERT INTO fin_balance_snapshots (account, balance, snapshot_date, source)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(account, snapshot_date) DO UPDATE SET
+                 balance=excluded.balance, source=excluded.source, created_at=CURRENT_TIMESTAMP""",
+            (account, balance, snapshot_date, source),
+        )
+        await self._conn.commit()
+
+    async def fin_save_all_snapshots(self, source: str = "auto") -> None:
+        """Save today's snapshot for all accounts (called by fin_remind at 08:00)."""
+        accounts = await self.fin_get_accounts()
+        for acc in accounts:
+            await self.fin_save_snapshot(acc["name"], acc["balance"], source=source)
+
+    async def fin_get_snapshot_on_date(self, account: str, target_date: str) -> dict | None:
+        """Get balance snapshot for account on a specific date (or nearest earlier date)."""
+        async with self._conn.execute(
+            """SELECT account, balance, snapshot_date, source FROM fin_balance_snapshots
+               WHERE account=? AND snapshot_date <= ?
+               ORDER BY snapshot_date DESC LIMIT 1""",
+            (account, target_date),
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+    async def fin_get_balance_history(self, account: str, days: int = 30) -> list:
+        """Get balance snapshots for account for last N days."""
+        async with self._conn.execute(
+            """SELECT account, balance, snapshot_date, source FROM fin_balance_snapshots
+               WHERE account=? AND snapshot_date >= date('now', ?)
+               ORDER BY snapshot_date DESC""",
+            (account, f"-{days} days"),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
 
     async def fin_add_transaction(
         self, account: Optional[str], amount: float, tx_type: str,

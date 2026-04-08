@@ -46,6 +46,7 @@ async def run(config: dict) -> None:
 
     try:
         async with Database(db_path) as db:
+            await _cleanup_stale_new_gdrive(db)
             await _execute_confirmed_deletions(db, config)
             await _resend_stale_pending_deletions(db, notifier)
             await _rollover_overdue_tasks(config)
@@ -54,6 +55,7 @@ async def run(config: dict) -> None:
             if stats["auth_failed"]:
                 return
             await _process_apple_notes_legacy(db, notifier, config, stats, limit_notes)
+            await _retry_stuck_apple_notes(db, notifier, config, stats, limit_notes)
 
     except Exception as e:
         logger.error(f"Fatal error in legacy: {e}", exc_info=True)
@@ -127,6 +129,18 @@ async def _resend_stale_pending_deletions(db: Database, notifier: Notifier) -> N
         if new_msg_id:
             await db.update_stale_deletion_msg(del_id, new_msg_id)
             logger.info(f"Re-sent stale deletion request #{del_id} '{title}' → msg_id={new_msg_id}")
+
+
+async def _cleanup_stale_new_gdrive(db: Database) -> None:
+    """Mark gdrive items stuck in 'new' status for >7 days as 'skipped'.
+
+    These are orphaned records from the 2026-03-11 bug (Changes API processed
+    all Drive files without inbox_folder_id filter). They are not inbox items
+    and will never be picked up by any processor — clean them up silently.
+    """
+    rows = await db.cleanup_stale_new_files(source="gdrive", days=7)
+    if rows:
+        logger.info(f"Cleanup: marked {rows} stale gdrive 'new' records as 'skipped'")
 
 
 async def _execute_confirmed_deletions(db: Database, config: dict) -> None:
@@ -282,7 +296,8 @@ async def _process_gdrive_legacy(
         service = await asyncio.to_thread(build_service, config)
     except Exception as e:
         logger.error(f"Google Drive auth failed: {e}")
-        await notifier.send_message(f"⚠️ <b>Google Drive авторизация провалилась</b> (legacy)\nЗапусти <code>sba auth google</code>\nПосле авторизации запусти вручную: <code>cd ~/Desktop/second-brain-agent-v2 &amp;&amp; CLAUDECODE=\"\" .venv/bin/sba legacy</code>\nИли подожди до 09:00 — запустится автоматически.\n\n{e}")
+        from sba.notifier import notify_auth_error
+        await notify_auth_error(notifier, "Google Drive (legacy)", e)
         stats["auth_failed"] = True
         return
 
@@ -477,7 +492,10 @@ async def _process_apple_notes_legacy(
             content_hash=c_hash, title=title,
         )
         if not is_new:
-            continue
+            # Retry notes stuck in 'new' status (e.g. registered when agent couldn't run)
+            status = await db.get_file_status(reg_id)
+            if status != "new":
+                continue
 
         await _run_agent_on_legacy_item(
             db=db, notifier=notifier, config=config,
@@ -493,6 +511,42 @@ async def _process_apple_notes_legacy(
         await db.set_pattern("legacy_notes_last_run_ms", str(now_ms))
     else:
         logger.info(f"Apple Notes: hit limit ({limit}), not advancing timestamp — {len(all_notes) - processed} notes remain")
+
+
+async def _retry_stuck_apple_notes(
+    db: Database, notifier: Notifier, config: dict, stats: dict, limit: int
+) -> None:
+    """Process apple_notes stuck in 'new' status that were missed by incremental scan.
+
+    The incremental scan only sees notes modified *after* last_run_ms — notes
+    registered in DB as 'new' during auth/cost failures (older modified_at) are
+    never revisited. This pass fetches them by ID directly from Apple Notes.
+    """
+    stuck = await db.get_unprocessed_files(source="apple_notes", limit=limit)
+    if not stuck:
+        return
+
+    logger.info(f"Apple Notes: retrying {len(stuck)} stuck 'new' notes from DB")
+    for row in stuck:
+        if stats["processed"] >= limit:
+            break
+        reg_id = row["id"]
+        note_id = row["source_id"]
+        title = row["title"] or "Untitled"
+
+        try:
+            note_data = await asyncio.to_thread(apple_notes.get_note_by_id, note_id)
+            content = note_data.get("content_text", "") if note_data else ""
+        except Exception as e:
+            logger.warning(f"Apple Notes: could not fetch '{title}' ({note_id}): {e}")
+            content = ""
+
+        await _run_agent_on_legacy_item(
+            db=db, notifier=notifier, config=config,
+            source="apple_notes", source_id=note_id,
+            title=title, content=content, stats=stats,
+            reg_id=reg_id,
+        )
 
 
 async def _run_agent_on_legacy_item(
@@ -528,6 +582,8 @@ async def _run_agent_on_legacy_item(
         await main_agent.run_main_agent(message, db=db, notifier=notifier, config=config,
                                         _cost_accumulator=cost_log)
         stats["processed"] += 1
+        if reg_id:
+            await db.update_file_status(reg_id, "processed")
     except Exception as e:
         logger.error(f"Agent failed for '{title}': {e}")
         stats["errors"] += 1
