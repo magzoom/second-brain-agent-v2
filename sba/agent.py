@@ -314,18 +314,65 @@ async def _finance_get_balance_tool(args: dict) -> dict:
     liabilities = await _db.fin_get_liabilities()
     total_cash = sum(a["balance"] for a in accounts if a["balance"] > 0)
     total_debt = sum(l["amount"] for l in liabilities)
-    lines = ["Счета:"]
-    for a in accounts:
-        lines.append(f"  {a['label']}: {a['balance']:,.0f} ₸")
-    lines.append(f"Итого на счетах: {total_cash:,.0f} ₸")
-    lines.append("\nОбязательства:")
+    # Sort: main first, then by balance desc
+    order = {"account_main": 0, "account_2": 1, "account_3": 2, "account_4": 3, "account_5": 4, "account_biz": 5}
+    accounts_sorted = sorted(accounts, key=lambda a: order.get(a["name"], 9))
+    lines = ["💳 Счета:"]
+    for a in accounts_sorted:
+        if a["balance"] > 0:
+            lines.append(f"  {a['label']}: {a['balance']:,.0f} ₸")
+    lines.append(f"  Итого: {total_cash:,.0f} ₸")
+    lines.append("\n📋 Обязательства:")
     for l in liabilities:
-        mp = f" (ежемес. {l['monthly_payment']:,.0f})" if l.get("monthly_payment") else ""
-        dd = f" до {l['due_date']}" if l.get("due_date") else ""
-        lines.append(f"  {l['creditor'] or l['name']}: {l['amount']:,.0f} ₸{mp}{dd}")
-    lines.append(f"Итого долгов: {total_debt:,.0f} ₸")
-    lines.append(f"\nЧистые активы: {total_cash - total_debt:,.0f} ₸")
+        mp = f" / {l['monthly_payment']:,.0f} ₸/мес" if l.get("monthly_payment") else ""
+        lines.append(f"  {l['creditor'] or l['name']}: {l['amount']:,.0f} ₸{mp}")
+    lines.append(f"  Итого: {total_debt:,.0f} ₸")
+    net = total_cash - total_debt
+    sign = "+" if net >= 0 else ""
+    lines.append(f"\n📊 Чистые активы: {sign}{net:,.0f} ₸")
     return _ok("\n".join(lines))
+
+
+@tool("finance_get_balance_on_date", "Получить баланс счёта на конкретную дату (из сохранённых снимков).", {
+    "type": "object",
+    "properties": {
+        "account":  {"type": "string", "description": "Название счёта (account_main, account_2, и т.д.). Если не указан — все счета."},
+        "date":     {"type": "string", "description": "Дата в формате YYYY-MM-DD"},
+    },
+    "required": ["date"],
+})
+async def _finance_get_balance_on_date_tool(args: dict) -> dict:
+    if not _db:
+        return _ok("DB not initialized")
+    from sba import finance as _fin
+    from datetime import date as _date
+    target_date = args.get("date", "")
+    account_raw = args.get("account", "")
+    account = _fin.resolve_account(account_raw) if account_raw else None
+
+    if account:
+        snap = await _db.fin_get_snapshot_on_date(account, target_date)
+        if not snap:
+            return _ok(f"Нет данных о балансе {account} на {target_date}. "
+                       f"Снимки сохраняются начиная с даты первого обновления баланса.")
+        acc = await _db.fin_get_account(account)
+        label = acc["label"] if acc else account
+        return _ok(f"{label} на {snap['snapshot_date']}: {snap['balance']:,.0f} ₸ (источник: {snap['source']})")
+    else:
+        accounts = await _db.fin_get_accounts()
+        lines = [f"Балансы на {target_date} (ближайший снимок):"]
+        found_any = False
+        for a in accounts:
+            snap = await _db.fin_get_snapshot_on_date(a["name"], target_date)
+            if snap:
+                found_any = True
+                lines.append(f"  {a['label']}: {snap['balance']:,.0f} ₸ ({snap['snapshot_date']}, {snap['source']})")
+            else:
+                lines.append(f"  {a['label']}: нет данных")
+        if not found_any:
+            return _ok(f"Нет снимков баланса за {target_date} и ранее. "
+                       f"Снимки начнут накапливаться автоматически с сегодняшнего дня.")
+        return _ok("\n".join(lines))
 
 
 @tool("finance_add_transaction", "Добавить доход или расход.", {
@@ -582,6 +629,7 @@ _main_server = create_sdk_mcp_server(
         _search_knowledge_tool,
         _request_deletion_tool,
         _finance_get_balance_tool,
+        _finance_get_balance_on_date_tool,
         _finance_add_transaction_tool,
         _finance_update_account_tool,
         _finance_manage_liability_tool,
@@ -629,7 +677,9 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 
 Финансы (личный финансист):
 ВАЖНО: Любые вопросы про деньги, счета, балансы, расходы, долги, закят — это финансовые запросы. НЕ используй search_knowledge для финансовых запросов.
+ВАЖНО: Результат финансовых инструментов (finance_get_balance, finance_get_balance_on_date, finance_get_transactions, finance_get_summary) передавай пользователю ДОСЛОВНО, без пересказа и сокращений. Не перефразируй числа и названия счетов.
 - "баланс", "сколько денег", "мои счета", "на счетах", "на счету", "сколько на счёте", "финансы", "деньги на счёте" → finance_get_balance
+- "баланс на X", "сколько было X апреля", "остаток на [дата]", "сколько было на счёте [дата]" → finance_get_balance_on_date
 - "потратил X на Y", "купил X за Y", "заплатил X за Y", "списалось X" → finance_add_transaction (tx_type=expense)
 - "получил зарплату", "пришло X", "зачислили X" → finance_add_transaction (tx_type=income)
 - "взял в долг у X сумма" → finance_manage_liability (action=add_new) + finance_add_transaction (tx_type=debt_taken)
@@ -721,6 +771,7 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__search_knowledge",
             "mcp__sba__request_deletion",
             "mcp__sba__finance_get_balance",
+            "mcp__sba__finance_get_balance_on_date",
             "mcp__sba__finance_add_transaction",
             "mcp__sba__finance_update_account",
             "mcp__sba__finance_manage_liability",

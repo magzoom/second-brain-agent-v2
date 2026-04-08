@@ -37,6 +37,9 @@ async def _run(config: dict) -> None:
 
     async with Database(db_path) as db:
         due = await db.fin_get_due_recurring(today_day, days_in_month)
+        # Save daily balance snapshot for all accounts
+        await db.fin_save_all_snapshots(source="auto")
+        logger.info("Saved daily balance snapshots for all accounts")
 
     if not due:
         logger.info("No recurring reminders due today")

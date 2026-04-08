@@ -223,3 +223,28 @@ def notify_sync(config: dict, text: str) -> None:
     notifier = Notifier(config)
     if notifier.enabled:
         asyncio.run(notifier.send(text))
+
+
+async def notify_auth_error(notifier: "Notifier", service: str, error: Exception) -> None:
+    """Send auth error notification with 12h cooldown to avoid spam."""
+    import time
+    from pathlib import Path
+    flag_file = Path.home() / ".sba" / "locks" / f"auth_error_{service}.flag"
+    flag_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Cooldown: don't spam if already notified in last 12 hours
+    if flag_file.exists():
+        last_sent = flag_file.stat().st_mtime
+        if time.time() - last_sent < 43200:  # 12 hours
+            logger.warning(f"Auth error for {service} (notification suppressed by cooldown)")
+            return
+
+    flag_file.write_text(str(time.time()))
+    msg = (
+        f"🔐 <b>Авторизация слетела: {service}</b>\n\n"
+        f"<code>{error}</code>\n\n"
+        f"Запусти в терминале:\n"
+        f"<code>cd ~/Desktop/second-brain-agent-v2 &amp;&amp; CLAUDECODE=\"\" .venv/bin/sba auth google</code>\n\n"
+        f"После авторизации {service} продолжит работу автоматически."
+    )
+    await notifier.send(msg)

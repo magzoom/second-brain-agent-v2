@@ -6,6 +6,7 @@ Only technical callbacks: ✅/❌ for deletion confirmations.
 
 Message flow:
   Text  → Main Agent (with chat history for context)
+  Voice → mlx-whisper transcription → Main Agent (same path as text)
   File/Photo → Upload to Google Drive Inbox → answer
 
 Chat history kept in-memory (last 5 messages per chat).
@@ -35,9 +36,14 @@ _chat_history: dict[int, deque] = {}
 
 
 def setup(config: dict) -> None:
+    import os
     global _config, _owner_chat_id
     _config = config
     _owner_chat_id = int(config.get("owner", {}).get("telegram_chat_id", 0))
+    # Ensure homebrew binaries (ffmpeg etc.) are available when running under launchd
+    homebrew = "/opt/homebrew/bin"
+    if homebrew not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = homebrew + ":" + os.environ.get("PATH", "")
 
 
 def _is_owner(message: Message) -> bool:
@@ -113,27 +119,16 @@ async def cmd_log(message: Message) -> None:
         await message.answer(f"❌ Не удалось прочитать лог: {e}")
 
 
-# ── Text input → Main Agent ───────────────────────────────────────────────────
+# ── Shared agent runner ───────────────────────────────────────────────────────
 
-@router.message(F.text & ~F.text.startswith("/"))
-async def handle_text_input(message: Message) -> None:
-    if not _is_owner(message):
-        return
-
-    text = message.text.strip()
-    if not text:
-        return
-
+async def _run_agent(message: Message, text: str, status_msg) -> None:
+    """Common logic for calling Main Agent. Used by text and voice handlers."""
     chat_id = message.chat.id
-
-    # Build context from history
     if chat_id not in _chat_history:
         _chat_history[chat_id] = deque(maxlen=5)
     history = _chat_history[chat_id]
     context = "\n".join(f"{r}: {t}" for r, t in history)
     full_message = f"{context}\nuser: {text}" if context else text
-
-    status_msg = await message.answer("⏳ Обрабатываю...")
 
     try:
         from sba.notifier import Notifier
@@ -151,13 +146,11 @@ async def handle_text_input(message: Message) -> None:
 
         result = result or "Готово."
 
-        # Truncate if too long
         if len(result) > 4000:
             result = result[:3900] + "\n\n[сообщение обрезано, запроси детали отдельно]"
 
         await status_msg.edit_text(result, parse_mode=None)
 
-        # Update history
         history.append(("user", text))
         history.append(("assistant", result[:200]))
 
@@ -166,6 +159,68 @@ async def handle_text_input(message: Message) -> None:
     except Exception as e:
         logger.error(f"Agent error: {e}", exc_info=True)
         await status_msg.edit_text("Что-то пошло не так. Попробуй ещё раз или проверь /log")
+
+
+# ── Text input → Main Agent ───────────────────────────────────────────────────
+
+@router.message(F.text & ~F.text.startswith("/"))
+async def handle_text_input(message: Message) -> None:
+    if not _is_owner(message):
+        return
+    text = message.text.strip()
+    if not text:
+        return
+    status_msg = await message.answer("⏳ Обрабатываю...")
+    await _run_agent(message, text, status_msg)
+
+
+# ── Voice input → mlx-whisper → Main Agent ───────────────────────────────────
+
+@router.message(F.voice)
+async def handle_voice_input(message: Message, bot: Bot) -> None:
+    if not _is_owner(message):
+        return
+
+    status_msg = await message.answer("🎙 Распознаю речь...")
+
+    ogg_path = None
+    try:
+        tg_file = await bot.get_file(message.voice.file_id)
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            ogg_path = Path(tmp.name)
+        await bot.download_file(tg_file.file_path, destination=str(ogg_path))
+
+        import mlx_whisper
+        initial_prompt = (
+            "Kaspi, Халык, Halyk, Freedom, RBK, Тайяб, ОтбасыБанк, SmartThings, "
+            "тенге, тиын, ₸, тысяч тенге, миллион тенге,"
+            "садака, закят, нисаб, рассрочка, депозит, транш, "
+            "Toyota Prado, RAV4, Toyota RAV4, "
+            "ВРЦ, реабилитационный центр, "
+            "основной счёт, второй счёт, бизнес счёт, "
+            "расход, доход, перевод, оплата, долг, кредит."
+        )
+        result = await asyncio.to_thread(
+            mlx_whisper.transcribe,
+            str(ogg_path),
+            path_or_hf_repo="mlx-community/whisper-small-mlx",
+            initial_prompt=initial_prompt,
+        )
+
+        text = result.get("text", "").strip()
+        if not text:
+            await status_msg.edit_text("❌ Не удалось распознать речь")
+            return
+
+        await status_msg.edit_text(f"🎙 <i>{text}</i>\n\n⏳ Обрабатываю...", parse_mode="HTML")
+        await _run_agent(message, text, status_msg)
+
+    except Exception as e:
+        logger.error(f"Voice transcription error: {e}", exc_info=True)
+        await status_msg.edit_text("❌ Ошибка распознавания речи")
+    finally:
+        if ogg_path:
+            ogg_path.unlink(missing_ok=True)
 
 
 # ── File / photo input ────────────────────────────────────────────────────────
