@@ -839,11 +839,15 @@ class Database:
         await self._conn.commit()
 
     async def fin_get_monthly_summary(self, year: int, month: int) -> dict:
-        """Return income, expense totals and category breakdown for a given month."""
+        """Return income, expense totals and category breakdown for a given month.
+        Excludes transfer transactions (inter-account moves are not income/expense).
+        """
         prefix = f"{year:04d}-{month:02d}"
         async with self._conn.execute(
             """SELECT tx_type, category, SUM(amount) as total
-               FROM fin_transactions WHERE tx_date LIKE ? GROUP BY tx_type, category""",
+               FROM fin_transactions
+               WHERE tx_date LIKE ? AND tx_type != 'transfer'
+               GROUP BY tx_type, category""",
             (f"{prefix}%",),
         ) as cur:
             rows = [dict(r) for r in await cur.fetchall()]

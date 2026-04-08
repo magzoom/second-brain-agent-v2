@@ -380,7 +380,7 @@ async def _finance_get_balance_on_date_tool(args: dict) -> dict:
     "properties": {
         "account":     {"type": "string", "description": "Название счёта (account_main, account_2, account_3, account_4, account_5, account_biz)"},
         "amount":      {"type": "number",  "description": "Сумма (всегда положительная)"},
-        "tx_type":     {"type": "string",  "description": "income, expense, debt_taken, debt_paid"},
+        "tx_type":     {"type": "string",  "description": "income, expense, transfer, debt_taken, debt_paid"},
         "category":    {"type": "string",  "description": "Категория (еда, кафе, транспорт, коммуналка, зарплата и т.д.)"},
         "description": {"type": "string",  "description": "Описание транзакции"},
         "tx_date":     {"type": "string",  "description": "Дата YYYY-MM-DD (если не сегодня)"},
@@ -399,7 +399,7 @@ async def _finance_add_transaction_tool(args: dict) -> dict:
     description = args.get("description", "")
     tx_date = args.get("tx_date", "")
     await _db.fin_add_transaction(account, amount, tx_type, category, description, tx_date)
-    sign = "+" if tx_type in ("income", "debt_taken") else "-"
+    sign = "⇄" if tx_type == "transfer" else ("+" if tx_type in ("income", "debt_taken") else "-")
     acc_label = account or "без счёта"
     return _ok(f"Записано: {sign}{amount:,.0f} ₸ [{category or tx_type}] {acc_label}")
 
@@ -553,7 +553,12 @@ async def _finance_get_transactions_tool(args: dict) -> dict:
         return _ok("Транзакций не найдено.")
     lines = [f"Последние {len(rows)} транзакций{f' ({account_raw})' if account_raw else ''}:"]
     for r in rows:
-        sign = "+" if r["tx_type"] == "income" else "-"
+        if r["tx_type"] == "transfer":
+            sign = "⇄"
+        elif r["tx_type"] in ("income", "debt_taken"):
+            sign = "+"
+        else:
+            sign = "-"
         acc = r.get("account") or "—"
         desc = r.get("description") or r.get("category") or ""
         lines.append(f"  {r['tx_date']}  {sign}{r['amount']:,.0f} ₸  [{acc}]  {desc}")
@@ -681,28 +686,30 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 - "баланс", "сколько денег", "мои счета", "на счетах", "на счету", "сколько на счёте", "финансы", "деньги на счёте" → finance_get_balance
 - "баланс на X", "сколько было X апреля", "остаток на [дата]", "сколько было на счёте [дата]" → finance_get_balance_on_date
 - "потратил X на Y", "купил X за Y", "заплатил X за Y", "списалось X" → finance_add_transaction (tx_type=expense)
-- "получил зарплату", "пришло X", "зачислили X" → finance_add_transaction (tx_type=income)
+- "получил зарплату", "зарплата пришла", "пришло X от X" → finance_add_transaction (tx_type=income, account=account_3 — зарплата приходит на Freedom)
+- "перевёл X с X на X", "перекинул X на основной", "перевёл с депозита", "перевёл с Фридом" → finance_add_transaction (tx_type=transfer) — переводы между своими счетами НЕ являются доходом или расходом, только tx_type=transfer
 - "взял в долг у X сумма" → finance_manage_liability (action=add_new) + finance_add_transaction (tx_type=debt_taken)
 - "отдал X долг сумма" → finance_manage_liability (action=update_amount) + finance_add_transaction (tx_type=debt_paid)
 - "оплата рассрочки", "заплатил рассрочку", "рассрочка Каспи сумма" → finance_manage_liability (action=update_amount, name=kaspi_installment, amount=текущий_остаток - сумма_платежа) + finance_add_transaction (tx_type=expense, category=кредиты)
 - "Каспи X тенге", "баланс Каспи X", "на Каспи X", "обнови счёт X" → finance_update_account
 - "закят", "зякат" → finance_get_zakat
-- "итоги месяца", "сводка", "расходы за месяц" → finance_get_summary
+- "итоги месяца", "сводка", "расходы за месяц" → finance_get_summary (переводы между счетами исключаются из сводки автоматически)
 - "последние транзакции", "последние расходы", "что было по счёту", "с чего продолжить", "какая последняя транзакция" → finance_get_transactions
 - "регулярные платежи", "мои подписки" → finance_list_recurring
 
 Маппинг счетов (используй эти имена в инструментах):
-  основной / main → account_main
-  второй / second / второй счёт → account_2
-  счёт 3 / account_3 → account_3
-  счёт 4 / account_4 → account_4
-  счёт 5 / account_5 → account_5
+  основной / main / каспи основной → account_main  (Kaspi основной — основной расчётный)
+  депозит / второй / каспи депозит → account_2     (Kaspi Депозит — накопительный, переводы отсюда = transfer)
+  фридом / freedom / зарплатный → account_3         (Freedom Bank — зарплата приходит сюда, потом transfer на основной)
+  халык / halyk → account_4
+  рбк / rbk / tayyab → account_5
   бизнес / business → account_biz
 
 Маппинг обязательств:
-  долги людям → people_debt
-  рассрочка Каспи → kaspi_installment
-  налог на транспорт → transport_tax
+  рассрочка Каспи / каспи рассрочка → kaspi_installment
+  Муратбек → debt_muratbek
+  Нурлан → debt_nurlan
+  Саят → debt_sayat
 
 Если пользователь не уточнил счёт — спроси с какого. Никогда не придумывай счёт.
 Даты: если пользователь говорит "вчера", "три дня назад" — вычисли правильную дату YYYY-MM-DD.
