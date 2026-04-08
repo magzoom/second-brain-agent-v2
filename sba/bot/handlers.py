@@ -34,6 +34,12 @@ _owner_chat_id: int = 0
 # Short-term conversation memory: chat_id → deque of (role, text)
 _chat_history: dict[int, deque] = {}
 
+# Pending bank statement transactions awaiting user confirmation: chat_id → list[dict]
+_pending_statements: dict[int, list] = {}
+
+# Filename keywords that indicate a bank statement PDF
+_STATEMENT_KEYWORDS = ["выписка", "statement", "kaspi", "каспи", "halyk", "халык", "freedom", "deposit", "депозит"]
+
 
 def setup(config: dict) -> None:
     import os
@@ -225,6 +231,28 @@ async def handle_voice_input(message: Message, bot: Bot) -> None:
 
 # ── File / photo input ────────────────────────────────────────────────────────
 
+def _is_bank_statement(file_name: str, mime_type: str) -> bool:
+    """Return True if the file looks like a bank statement PDF."""
+    if mime_type != "application/pdf":
+        return False
+    fn = file_name.lower()
+    return any(k in fn for k in _STATEMENT_KEYWORDS)
+
+
+def _detect_account_from_filename(file_name: str) -> str | None:
+    """Guess account_id from filename."""
+    fn = file_name.lower()
+    if any(k in fn for k in ["депозит", "deposit", "d1000"]):
+        return "account_2"
+    if any(k in fn for k in ["freedom"]):
+        return "account_3"
+    if any(k in fn for k in ["halyk", "халык"]):
+        return "account_4"
+    if any(k in fn for k in ["gold", "kaspi", "каспи"]):
+        return "account_main"
+    return None
+
+
 @router.message(F.document | F.photo)
 async def handle_file_input(message: Message, bot: Bot) -> None:
     if not _is_owner(message):
@@ -247,6 +275,11 @@ async def handle_file_input(message: Message, bot: Bot) -> None:
             tmp_path = Path(tmp.name)
         await bot.download_file(tg_file.file_path, destination=str(tmp_path))
 
+        # Bank statement PDF → parse and import instead of uploading to Drive
+        if _is_bank_statement(file_name, mime_type):
+            await _handle_bank_statement(message, bot, tmp_path, file_name)
+            return
+
         try:
             from sba.integrations.google_drive import build_service, upload_file
             inbox_folder_id = _config.get("google_drive", {}).get("inbox_folder_id", "")
@@ -268,6 +301,153 @@ async def handle_file_input(message: Message, bot: Bot) -> None:
     except Exception as e:
         logger.exception(f"handle_file_input failed: {e}")
         await message.answer(f"❌ Ошибка: {e}")
+
+
+async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, file_name: str) -> None:
+    """Parse a bank statement PDF and offer to import transactions."""
+    status_msg = await message.answer("🏦 Читаю банковскую выписку...")
+    try:
+        import anthropic
+        import base64
+        import json
+
+        pdf_bytes = tmp_path.read_bytes()
+        pdf_b64 = base64.standard_b64encode(pdf_bytes).decode()
+
+        account = _detect_account_from_filename(file_name)
+        account_hint = f"\nСчёт из имени файла: {account}" if account else ""
+        accounts_info = (
+            "account_main=Kaspi основной, account_2=Kaspi Депозит, "
+            "account_3=Freedom Bank, account_4=Halyk, account_5=RBK/Tayyab, account_biz=Kaspi Business"
+        )
+
+        client = anthropic.Anthropic(api_key=_config.get("anthropic", {}).get("api_key", ""))
+        response = await asyncio.to_thread(
+            client.messages.create,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Извлеки все транзакции из этой банковской выписки.{account_hint}\n"
+                            f"Счета: {accounts_info}\n\n"
+                            "Верни ТОЛЬКО JSON массив без пояснений:\n"
+                            '[{"tx_date":"2026-04-01","amount":5000.0,"tx_type":"expense",'
+                            '"category":"еда","description":"Название операции","account":"account_main"},...]\n\n'
+                            "Правила:\n"
+                            "- tx_type: expense (расход), income (доход), transfer (перевод между своими счетами)\n"
+                            "- Переводы между своими счетами → transfer\n"
+                            "- Зарплата/поступления → income\n"
+                            "- amount: всегда положительное число\n"
+                            "- Категории: еда, транспорт, кафе, коммуналка, интернет, подписки, "
+                            "здоровье, красота, одежда, развлечения, сбережения, кредиты, налоги, "
+                            "дом, переводы людям, подарки, садака, разное"
+                        ),
+                    },
+                ],
+            }],
+        )
+
+        raw = response.content[0].text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+
+        transactions = json.loads(raw)
+        if not transactions:
+            await status_msg.edit_text("❌ Транзакции не найдены в файле")
+            return
+
+        _pending_statements[message.chat.id] = transactions
+
+        total_exp = sum(t["amount"] for t in transactions if t["tx_type"] == "expense")
+        total_inc = sum(t["amount"] for t in transactions if t["tx_type"] == "income")
+        total_tr = sum(t["amount"] for t in transactions if t["tx_type"] == "transfer")
+
+        preview_lines = [
+            f"🏦 <b>Выписка распознана: {len(transactions)} операций</b>\n",
+            f"📤 Расходы: {total_exp:,.0f} ₸" if total_exp else "",
+            f"📥 Доходы: {total_inc:,.0f} ₸" if total_inc else "",
+            f"↔️ Переводы: {total_tr:,.0f} ₸" if total_tr else "",
+            "",
+            "<b>Первые 10 операций:</b>",
+        ]
+        preview_lines = [l for l in preview_lines if l != ""]
+
+        for t in transactions[:10]:
+            sign = "−" if t["tx_type"] == "expense" else ("+" if t["tx_type"] == "income" else "↔")
+            desc = t.get("description", "")[:35]
+            preview_lines.append(f"  {t['tx_date']} {sign}{t['amount']:,.0f} ₸ {desc}")
+
+        if len(transactions) > 10:
+            preview_lines.append(f"  ... и ещё {len(transactions) - 10}")
+
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text=f"✅ Импортировать {len(transactions)} операций",
+                callback_data="stmt_confirm",
+            ),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="stmt_cancel"),
+        ]])
+
+        await status_msg.edit_text("\n".join(preview_lines), reply_markup=kb)
+
+    except Exception as e:
+        logger.error(f"Bank statement parsing failed: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Не удалось распознать выписку: {e}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+@router.callback_query(F.data == "stmt_confirm")
+async def callback_stmt_confirm(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    await callback.answer()
+    chat_id = callback.from_user.id
+    transactions = _pending_statements.pop(chat_id, None)
+    if not transactions:
+        await callback.message.edit_text("⚠️ Данные устарели — отправь выписку заново")
+        return
+    try:
+        await callback.message.edit_text("⏳ Импортирую...")
+        from sba.db import Database, get_db_path
+        async with Database(get_db_path(_config)) as db:
+            for t in transactions:
+                await db.fin_add_transaction(
+                    account=t.get("account", "account_main"),
+                    amount=float(t["amount"]),
+                    tx_type=t["tx_type"],
+                    category=t.get("category", "разное"),
+                    description=t.get("description", ""),
+                    tx_date=t.get("tx_date"),
+                )
+        await callback.message.edit_text(
+            f"✅ Импортировано {len(transactions)} операций.\n"
+            "Если нужно — обнови остатки на счетах: напиши «баланс основного X»"
+        )
+    except Exception as e:
+        logger.error(f"Statement import failed: {e}", exc_info=True)
+        await callback.message.edit_text(f"❌ Ошибка импорта: {e}")
+
+
+@router.callback_query(F.data == "stmt_cancel")
+async def callback_stmt_cancel(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    await callback.answer()
+    _pending_statements.pop(callback.from_user.id, None)
+    await callback.message.edit_text("❌ Импорт отменён")
 
 
 # ── Folder indexing callbacks ─────────────────────────────────────────────────

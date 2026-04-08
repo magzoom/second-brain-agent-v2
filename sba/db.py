@@ -928,6 +928,73 @@ class Database:
                     result.append(r)
         return result
 
+    async def fin_get_today_transactions(self, today_str: str) -> list:
+        """Return all transactions for a specific date."""
+        async with self._conn.execute(
+            "SELECT * FROM fin_transactions WHERE tx_date=? ORDER BY id",
+            (today_str,),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def fin_get_upcoming_recurring(self, today_day: int, days_in_month: int) -> list:
+        """Return active recurring payments due after today and before end of month."""
+        async with self._conn.execute(
+            """SELECT * FROM fin_recurring
+               WHERE is_active=1 AND day_of_month > ? AND day_of_month <= ?
+               ORDER BY day_of_month""",
+            (today_day, days_in_month),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def fin_get_total_balance(self) -> float:
+        """Return sum of all account balances."""
+        async with self._conn.execute(
+            "SELECT COALESCE(SUM(balance), 0) as total FROM fin_accounts"
+        ) as cur:
+            row = await cur.fetchone()
+            return float(row["total"]) if row else 0.0
+
+    async def fin_count_months_with_data(self) -> int:
+        """Return number of distinct months that have transaction data."""
+        async with self._conn.execute(
+            "SELECT COUNT(DISTINCT strftime('%Y-%m', tx_date)) as cnt FROM fin_transactions"
+        ) as cur:
+            row = await cur.fetchone()
+            return int(row["cnt"]) if row else 0
+
+    async def fin_get_avg_variable_spend(self, excluded_categories: set) -> float:
+        """Return average monthly variable spending, excluding given categories.
+        Uses last 2 full months of data."""
+        placeholders = ",".join("?" * len(excluded_categories))
+        params = list(excluded_categories)
+        async with self._conn.execute(
+            f"""SELECT strftime('%Y-%m', tx_date) as month, SUM(amount) as total
+                FROM fin_transactions
+                WHERE tx_type='expense' AND category NOT IN ({placeholders})
+                GROUP BY month
+                ORDER BY month DESC
+                LIMIT 2""",
+            params,
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        if not rows:
+            return 0.0
+        return sum(r["total"] for r in rows) / len(rows)
+
+    async def fin_get_month_variable_spend(self, month_str: str, excluded_categories: set) -> float:
+        """Return total variable spending for a given YYYY-MM month, excluding categories."""
+        placeholders = ",".join("?" * len(excluded_categories))
+        params = [f"{month_str}%"] + list(excluded_categories)
+        async with self._conn.execute(
+            f"""SELECT COALESCE(SUM(amount), 0) as total
+                FROM fin_transactions
+                WHERE tx_date LIKE ? AND tx_type='expense'
+                  AND category NOT IN ({placeholders})""",
+            params,
+        ) as cur:
+            row = await cur.fetchone()
+            return float(row["total"]) if row else 0.0
+
     # ── statistics ────────────────────────────────────────────────────────────
 
     async def get_stats(self) -> dict:
