@@ -121,6 +121,31 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 ### Регулярные платежи (seeded)
 17 записей: подписки (Apple, Google, YouTube, Telegram, Perplexity, Grok, Claude), Kaspi-кредиты (тренажёрка, импланты), ОтбасыБанк депозит, ИП, коммуналка, интернет, Аниса-математика, бензин, садака (ежедневно 100₸)
 
+### Логика проверки оплаты (fin_remind_processor.py + agent.py)
+
+**Утреннее напоминание (08:00):**
+- Ежедневные (day_of_month=0) — всегда в обычный список, без проверки транзакций
+- Разовые — `fin_find_matching_transactions(strict=True)` для каждого
+  - Совпадение найдено → отдельное сообщение с кнопками ❓ "Да, оплачено" / "Нет, не оплачено"
+  - Нет совпадений → обычное напоминание
+- `paid_month` уже выставлен → платёж скипается полностью
+
+**Callbacks (bot/handlers.py):**
+- `recur_paid:{id}` → `fin_mark_recurring_paid(id, YYYY-MM)` — молчит до следующего месяца
+- `recur_unpaid:{id}` → убирает кнопки, платёж остаётся активным
+
+**finance_list_recurring (agent.py), mode=upcoming (default):**
+- paid_month == current_month → скип
+- day_of_month < today → `fin_find_matching_transactions(strict=False)` (keyword only); найдено → скип; нет → "просрочен"
+- day_of_month >= today → показывается с датой
+
+**finance_list_recurring, mode=all:**
+- Все активные, оплаченные помечены ✅
+
+**Триггеры в промпте:**
+- "предстоящие/ближайшие платежи", "что платить" → mode=upcoming
+- "регулярные платежи", "мои подписки", "список напоминаний" → mode=all
+
 ## Иерархическая индексация Drive (legacy)
 
 - `_scan_folder(service, db, notifier, config, folder_id, path_stack, decisions_counter, ...)` — рекурсивный обход
@@ -155,7 +180,10 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - `fin_add_transaction(account, amount, tx_type, category, description, tx_date)` — добавить транзакцию
 - `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — проверка дубля по 4 полям
 - `fin_get_today_transactions(today_str)` → `list` — все транзакции за дату
-- `fin_get_upcoming_recurring(today_day, days_in_month)` → `list` — платежи после сегодня до конца месяца
+- `fin_get_upcoming_recurring(today_day, days_in_month, current_month=None)` → `list` — платежи после сегодня до конца месяца; если передан current_month — скипает оплаченные (paid_month)
+- `fin_find_matching_transactions(label, amount, month_str, strict=True)` → `list` — ищет expense-транзакции за месяц по совпадению; strict=True: AND(сумма±2%, ключевые слова); strict=False: только ключевые слова (для прошедших платежей с курсовой разницей). Переводы (tx_type=transfer) исключаются. Игнорирует короткие/общие слова: банк, bank, депозит, deposit, платёж, payment, оплата
+- `fin_get_recurring_by_id(id)` → `dict|None` — одна запись по id
+- `fin_mark_recurring_paid(id, month_str)` — выставить paid_month; сбрасывается автоматически в новом месяце
 - `fin_get_avg_variable_spend(excluded_categories: set)` → `float` — среднемесячные переменные расходы (last 2 months)
 - `fin_get_month_variable_spend(month_str, excluded_categories: set)` → `float` — переменные расходы за месяц
 - `fin_get_total_balance()` → `float` — сумма всех счетов
