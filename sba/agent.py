@@ -633,8 +633,9 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
                 daily.append(f"  • {label} — ежедневно")
             elif dom < today_day:
                 # Past due — check if transaction exists before marking overdue
+                # strict=False: keyword match alone is enough (amount may vary due to FX)
                 matches = await _db.fin_find_matching_transactions(
-                    item["label"], item.get("amount"), current_month
+                    item["label"], item.get("amount"), current_month, strict=False
                 )
                 if matches:
                     continue  # transaction found — treat as paid, skip

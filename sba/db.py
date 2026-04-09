@@ -941,7 +941,7 @@ class Database:
         return result
 
     async def fin_find_matching_transactions(
-        self, label: str, amount: float | None, month_str: str
+        self, label: str, amount: float | None, month_str: str, strict: bool = True
     ) -> list:
         """Find transactions this month that might correspond to a recurring payment.
         Matches by amount (within 10% or 50₸) OR by keywords from label in description."""
@@ -985,12 +985,19 @@ class Database:
 
             keyword_match = any(kw in desc for kw in keywords) if keywords else False
 
-            # Require BOTH conditions, or amount-only with very tight match (≤50₸)
-            if keywords:
-                is_match = amount_match and keyword_match
+            if strict:
+                # Strict (for upcoming reminders): require BOTH amount AND keyword
+                if keywords:
+                    is_match = amount_match and keyword_match
+                else:
+                    is_match = bool(amount and abs(tx_amount - amount) <= 50)
             else:
-                # No distinctive keywords — fall back to tight amount match only
-                is_match = bool(amount and abs(tx_amount - amount) <= 50)
+                # Lenient (for overdue check): keyword match alone is enough;
+                # subscriptions often vary slightly in amount due to exchange rates
+                if keywords:
+                    is_match = keyword_match
+                else:
+                    is_match = bool(amount and abs(tx_amount - amount) <= 50)
 
             if is_match:
                 matches.append(tx)
