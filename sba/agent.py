@@ -625,14 +625,20 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
         daily, overdue, upcoming = [], [], []
         for item in items:
             if item.get("paid_month") == current_month:
-                continue  # already paid — skip
+                continue  # confirmed paid — skip
             dom = item["day_of_month"]
             amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
             label = f"{item['label']}{amount_str}"
             if dom == 0:
                 daily.append(f"  • {label} — ежедневно")
             elif dom < today_day:
-                overdue.append(f"  • {label} — ⚠️ просрочен ({dom}-е)")
+                # Past due — check if transaction exists before marking overdue
+                matches = await _db.fin_find_matching_transactions(
+                    item["label"], item.get("amount"), current_month
+                )
+                if matches:
+                    continue  # transaction found — treat as paid, skip
+                overdue.append(f"  • {label} — просрочен ({dom}-е)")
             elif dom == today_day:
                 upcoming.append(f"  • {label} — сегодня ({dom}-е)")
             else:
