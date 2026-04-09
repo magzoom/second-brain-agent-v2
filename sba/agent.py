@@ -600,25 +600,68 @@ async def _finance_manage_recurring_tool(args: dict) -> dict:
         return _ok(f"Напоминание #{row_id} добавлено: {label}{amount_str} — {day_str}")
 
 
-@tool("finance_list_recurring", "Показать все активные регулярные напоминания.", {
-    "type": "object", "properties": {}, "required": [],
+@tool("finance_list_recurring", "Показать регулярные платежи. mode=upcoming — только предстоящие и просроченные; mode=all — все.", {
+    "type": "object",
+    "properties": {
+        "mode": {"type": "string", "description": "upcoming (default) или all", "default": "upcoming"},
+    },
+    "required": [],
 })
 async def _finance_list_recurring_tool(args: dict) -> dict:
     if not _db:
         return _ok("DB not initialized")
+    import calendar
     from datetime import date
-    current_month = date.today().strftime("%Y-%m")
+    today = date.today()
+    today_day = today.day
+    current_month = today.strftime("%Y-%m")
+    mode = args.get("mode", "upcoming")
+
     items = await _db.fin_get_recurring()
     if not items:
-        return _ok("Регулярных напоминаний нет. Добавь через: 'напоминай 23 числа оплатить коммуналку'")
-    lines = ["Регулярные напоминания:"]
-    for item in items:
-        day_str = "ежедневно" if item["day_of_month"] == 0 else f"{item['day_of_month']}-го числа"
-        amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
-        rb = f" (за {item['remind_days_before']} дн.)" if item.get("remind_days_before") else ""
-        paid_mark = " ✅ оплачено" if item.get("paid_month") == current_month else ""
-        lines.append(f"  #{item['id']} {item['label']}{amount_str} — {day_str}{rb}{paid_mark}")
-    return _ok("\n".join(lines))
+        return _ok("Регулярных напоминаний нет.")
+
+    if mode == "upcoming":
+        daily, overdue, upcoming = [], [], []
+        for item in items:
+            if item.get("paid_month") == current_month:
+                continue  # already paid — skip
+            dom = item["day_of_month"]
+            amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+            label = f"{item['label']}{amount_str}"
+            if dom == 0:
+                daily.append(f"  • {label} — ежедневно")
+            elif dom < today_day:
+                overdue.append(f"  • {label} — ⚠️ просрочен ({dom}-е)")
+            elif dom == today_day:
+                upcoming.append(f"  • {label} — сегодня ({dom}-е)")
+            else:
+                days_left = dom - today_day
+                upcoming.append(f"  • {label} — через {days_left} дн. ({dom}-е)")
+
+        lines = []
+        if overdue:
+            lines.append("⚠️ Просроченные:")
+            lines.extend(overdue)
+        if upcoming:
+            lines.append("📅 Предстоящие в этом месяце:")
+            lines.extend(upcoming)
+        if daily:
+            lines.append("🔁 Ежедневные:")
+            lines.extend(daily)
+        if not lines:
+            return _ok("Все платежи этого месяца оплачены ✅")
+        return _ok("\n".join(lines))
+    else:
+        # mode=all — full list with paid markers
+        lines = ["Все регулярные платежи:"]
+        for item in items:
+            dom = item["day_of_month"]
+            day_str = "ежедневно" if dom == 0 else f"{dom}-го числа"
+            amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+            paid_mark = " ✅" if item.get("paid_month") == current_month else ""
+            lines.append(f"  #{item['id']} {item['label']}{amount_str} — {day_str}{paid_mark}")
+        return _ok("\n".join(lines))
 
 
 # ── MCP servers ───────────────────────────────────────────────────────────────
@@ -698,7 +741,9 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 - "закят", "зякат" → finance_get_zakat
 - "итоги месяца", "сводка", "расходы за месяц" → finance_get_summary (переводы между счетами исключаются из сводки автоматически)
 - "последние транзакции", "последние расходы", "что было по счёту", "с чего продолжить", "какая последняя транзакция" → finance_get_transactions
-- "регулярные платежи", "мои подписки", "предстоящие платежи", "ближайшие платежи", "что платить", "какие платежи" → finance_list_recurring (ВСЕГДА использовать инструмент, не отвечать по памяти)
+- "предстоящие платежи", "ближайшие платежи", "что платить", "какие платежи" → finance_list_recurring(mode=upcoming)
+- "регулярные платежи", "мои подписки", "список напоминаний" → finance_list_recurring(mode=all)
+- ВСЕГДА вызывать инструмент, не отвечать по памяти
 
 Маппинг счетов (используй эти имена в инструментах):
   основной / main / каспи основной → account_main  (Kaspi основной — основной расчётный)
