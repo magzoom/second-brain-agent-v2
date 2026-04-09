@@ -178,7 +178,7 @@ async def _generate_weekly_forecast(db, today: date) -> str | None:
 
     month_str = today.strftime("%Y-%m")
 
-    upcoming_fixed = await db.fin_get_upcoming_recurring(today.day, days_in_month)
+    upcoming_fixed = await db.fin_get_upcoming_recurring(today.day, days_in_month, current_month=month_str)
     fixed_total = sum(r["amount"] or 0 for r in upcoming_fixed)
 
     variable_avg = await db.fin_get_avg_variable_spend(_FORECAST_EXCLUDED)

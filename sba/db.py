@@ -1031,15 +1031,21 @@ class Database:
         ) as cur:
             return [dict(r) for r in await cur.fetchall()]
 
-    async def fin_get_upcoming_recurring(self, today_day: int, days_in_month: int) -> list:
-        """Return active recurring payments due after today and before end of month."""
+    async def fin_get_upcoming_recurring(
+        self, today_day: int, days_in_month: int, current_month: str = None
+    ) -> list:
+        """Return active recurring payments due after today and before end of month.
+        Skips items already confirmed paid this month if current_month provided."""
         async with self._conn.execute(
             """SELECT * FROM fin_recurring
                WHERE is_active=1 AND day_of_month > ? AND day_of_month <= ?
                ORDER BY day_of_month""",
             (today_day, days_in_month),
         ) as cur:
-            return [dict(r) for r in await cur.fetchall()]
+            rows = [dict(r) for r in await cur.fetchall()]
+        if current_month:
+            rows = [r for r in rows if r.get("paid_month") != current_month]
+        return rows
 
     async def fin_get_total_balance(self) -> float:
         """Return sum of all account balances."""

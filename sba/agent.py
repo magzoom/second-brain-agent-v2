@@ -606,6 +606,8 @@ async def _finance_manage_recurring_tool(args: dict) -> dict:
 async def _finance_list_recurring_tool(args: dict) -> dict:
     if not _db:
         return _ok("DB not initialized")
+    from datetime import date
+    current_month = date.today().strftime("%Y-%m")
     items = await _db.fin_get_recurring()
     if not items:
         return _ok("Регулярных напоминаний нет. Добавь через: 'напоминай 23 числа оплатить коммуналку'")
@@ -614,7 +616,8 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
         day_str = "ежедневно" if item["day_of_month"] == 0 else f"{item['day_of_month']}-го числа"
         amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
         rb = f" (за {item['remind_days_before']} дн.)" if item.get("remind_days_before") else ""
-        lines.append(f"  #{item['id']} {item['label']}{amount_str} — {day_str}{rb}")
+        paid_mark = " ✅ оплачено" if item.get("paid_month") == current_month else ""
+        lines.append(f"  #{item['id']} {item['label']}{amount_str} — {day_str}{rb}{paid_mark}")
     return _ok("\n".join(lines))
 
 
