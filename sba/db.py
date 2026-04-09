@@ -53,6 +53,12 @@ def _create_tables(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # already exists
+    # Column migration: paid_month for recurring payment confirmation
+    try:
+        conn.execute("ALTER TABLE fin_recurring ADD COLUMN paid_month TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # already exists
     try:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_tracker_task_id "
@@ -900,10 +906,13 @@ class Database:
         await self._conn.commit()
         return True
 
-    async def fin_get_due_recurring(self, today_day: int, days_in_month: int = 31) -> list:
+    async def fin_get_due_recurring(
+        self, today_day: int, days_in_month: int = 31, current_month: str = None
+    ) -> list:
         """Return reminders due today: day_of_month==today OR day_of_month==0 (daily)
         OR advance reminder fires remind_days_before days before day_of_month,
-        with wraparound across month boundaries."""
+        with wraparound across month boundaries.
+        Skips items already confirmed paid this month (paid_month == current_month)."""
         async with self._conn.execute(
             "SELECT * FROM fin_recurring WHERE is_active=1 ORDER BY day_of_month, label"
         ) as cur:
@@ -911,6 +920,9 @@ class Database:
 
         result = []
         for r in rows:
+            # Skip if already confirmed paid this month
+            if current_month and r.get("paid_month") == current_month:
+                continue
             dom = r["day_of_month"]
             rdb = r.get("remind_days_before") or 0
             if dom == 0:
@@ -927,6 +939,79 @@ class Database:
                 if trigger == today_day:
                     result.append(r)
         return result
+
+    async def fin_find_matching_transactions(
+        self, label: str, amount: float | None, month_str: str
+    ) -> list:
+        """Find transactions this month that might correspond to a recurring payment.
+        Matches by amount (within 10% or 50₸) OR by keywords from label in description."""
+        month_start = f"{month_str}-01"
+        # Next month boundary
+        y, m = int(month_str[:4]), int(month_str[5:7])
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+        month_end = f"{y:04d}-{m:02d}-01"
+
+        async with self._conn.execute(
+            """SELECT * FROM fin_transactions
+               WHERE tx_date >= ? AND tx_date < ?
+               ORDER BY tx_date DESC""",
+            (month_start, month_end),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+        # Build keyword list from label (words with len > 3, skip generic finance words)
+        _GENERIC_WORDS = {"банк", "bank", "депозит", "deposit", "платёж", "payment", "оплата"}
+        keywords = [
+            w.lower() for w in label.split()
+            if len(w) > 3 and w.lower() not in _GENERIC_WORDS
+        ]
+
+        matches = []
+        for tx in rows:
+            # Only look at expenses — ignore transfers between own accounts
+            if tx.get("tx_type") == "transfer":
+                continue
+
+            desc = (tx.get("description") or "").lower()
+            tx_amount = abs(tx.get("amount") or 0)
+
+            amount_match = False
+            if amount and amount > 0:
+                # Tight tolerance: 2% or 100₸ max
+                tolerance = min(max(50, amount * 0.02), 100)
+                amount_match = abs(tx_amount - amount) <= tolerance
+
+            keyword_match = any(kw in desc for kw in keywords) if keywords else False
+
+            # Require BOTH conditions, or amount-only with very tight match (≤50₸)
+            if keywords:
+                is_match = amount_match and keyword_match
+            else:
+                # No distinctive keywords — fall back to tight amount match only
+                is_match = bool(amount and abs(tx_amount - amount) <= 50)
+
+            if is_match:
+                matches.append(tx)
+
+        return matches
+
+    async def fin_get_recurring_by_id(self, recurring_id: int) -> dict | None:
+        """Return a single recurring payment row by id."""
+        async with self._conn.execute(
+            "SELECT * FROM fin_recurring WHERE id=?", (recurring_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def fin_mark_recurring_paid(self, recurring_id: int, month_str: str) -> None:
+        """Mark a recurring payment as confirmed paid for the given month."""
+        await self._conn.execute(
+            "UPDATE fin_recurring SET paid_month=? WHERE id=?",
+            (month_str, recurring_id),
+        )
+        await self._conn.commit()
 
     async def fin_transaction_exists(self, account: str, tx_date: str, amount: float, description: str) -> bool:
         """Return True if a transaction with same account/date/amount/description already exists."""

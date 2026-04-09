@@ -44,8 +44,33 @@ class Notifier:
             return False
 
     # Alias for v2 agent tools
-    async def send_message(self, text: str) -> bool:
+    async def send_message(self, text: str, reply_markup: dict = None) -> bool:
+        if reply_markup is not None:
+            return await self.send_with_inline_keyboard(text, reply_markup)
         return await self.send(text)
+
+    async def send_with_inline_keyboard(self, text: str, inline_keyboard: dict) -> bool:
+        """Send a message with an inline keyboard (raw dict format for Bot API)."""
+        if not self._enabled:
+            return False
+        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "reply_markup": inline_keyboard,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        return True
+                    logger.error(f"Telegram API error: {data.get('description')}")
+                    return False
+        except Exception as e:
+            logger.error(f"Failed to send inline keyboard message: {e}")
+            return False
 
     async def send_inbox_report(self, processed: int, errors: int = 0) -> None:
         if processed == 0 and errors == 0:

@@ -623,6 +623,55 @@ async def callback_media_ack(callback: CallbackQuery) -> None:
             logger.warning(f"callback_media_ack edit_text failed: {e}")
 
 
+# ── Recurring payment check callbacks ────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("recur_paid:"))
+async def callback_recur_paid(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    try:
+        await callback.answer()
+    except Exception as e:
+        logger.debug(f"callback.answer() failed: {e}")
+    from datetime import date
+    recurring_id = int(callback.data.split(":")[1])
+    month_str = date.today().strftime("%Y-%m")
+    async with Database(get_db_path(_config)) as db:
+        await db.fin_mark_recurring_paid(recurring_id, month_str)
+        row = await db.fin_get_recurring_by_id(recurring_id)
+    label = row["label"] if row else f"#{recurring_id}"
+    try:
+        await callback.message.edit_text(
+            f"✅ <b>{label}</b> — отмечено как оплачено в {month_str}.\n"
+            "Напоминание не будет повторяться до следующего месяца.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning(f"callback_recur_paid edit_text failed: {e}")
+
+
+@router.callback_query(F.data.startswith("recur_unpaid:"))
+async def callback_recur_unpaid(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    try:
+        await callback.answer()
+    except Exception as e:
+        logger.debug(f"callback.answer() failed: {e}")
+    recurring_id = int(callback.data.split(":")[1])
+    async with Database(get_db_path(_config)) as db:
+        row = await db.fin_get_recurring_by_id(recurring_id)
+    label = row["label"] if row else f"#{recurring_id}"
+    try:
+        await callback.message.edit_text(
+            f"⚠️ <b>{label}</b> — платёж ещё не проведён.\n"
+            "Напоминание останется активным.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logger.warning(f"callback_recur_unpaid edit_text failed: {e}")
+
+
 # ── Deletion callbacks ────────────────────────────────────────────────────────
 
 @router.callback_query(F.data.startswith("confirm_del:"))

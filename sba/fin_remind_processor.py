@@ -52,28 +52,85 @@ async def _run(config: dict) -> None:
         # ── Morning run ───────────────────────────────────────────────────────
         today_day = today.day
         days_in_month = calendar.monthrange(today.year, today.month)[1]
+        month_str = today.strftime("%Y-%m")
 
-        due = await db.fin_get_due_recurring(today_day, days_in_month)
+        due = await db.fin_get_due_recurring(today_day, days_in_month, current_month=month_str)
         await db.fin_save_all_snapshots(source="auto")
         logger.info("Saved daily balance snapshots for all accounts")
 
         if due:
-            lines = [f"💳 <b>Регулярные платежи — {today.strftime('%d.%m.%Y')}</b>\n"]
+            unpaid = []
+            maybe_paid = []
+
             for item in due:
-                amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
                 if item["day_of_month"] == 0:
-                    day_str = "ежедневно"
-                elif item["day_of_month"] == today_day:
-                    day_str = f"срок сегодня ({today_day}-е)"
+                    # Daily payments (e.g. садака) — never check transactions, always show
+                    unpaid.append((item, None))
+                    continue
+                matches = await db.fin_find_matching_transactions(
+                    item["label"], item.get("amount"), month_str
+                )
+                if matches:
+                    maybe_paid.append((item, matches))
                 else:
-                    days_left = item["day_of_month"] - today_day
-                    day_str = f"через {days_left} дн. ({item['day_of_month']}-е)"
-                lines.append(f"• {item['label']}{amount_str} — {day_str}")
-            await notifier.send_message("\n".join(lines))
-            logger.info(f"Sent {len(due)} recurring reminders")
+                    unpaid.append((item, None))
+
+            # Send regular reminder for unpaid items
+            if unpaid:
+                lines = [f"💳 <b>Регулярные платежи — {today.strftime('%d.%m.%Y')}</b>\n"]
+                for item, _ in unpaid:
+                    amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+                    if item["day_of_month"] == 0:
+                        day_str = "ежедневно"
+                    elif item["day_of_month"] == today_day:
+                        day_str = f"срок сегодня ({today_day}-е)"
+                    else:
+                        days_left = item["day_of_month"] - today_day
+                        day_str = f"через {days_left} дн. ({item['day_of_month']}-е)"
+                    lines.append(f"• {item['label']}{amount_str} — {day_str}")
+                await notifier.send_message("\n".join(lines))
+
+            # Send individual check messages for maybe-paid items
+            for item, matches in maybe_paid:
+                await _send_paid_check(notifier, item, matches, today_day)
+
+            logger.info(
+                f"Recurring reminders: {len(unpaid)} unpaid, {len(maybe_paid)} maybe-paid"
+            )
         else:
             logger.info("No recurring reminders due today")
 
+
+
+async def _send_paid_check(notifier, item: dict, matches: list, today_day: int) -> None:
+    """Send a message asking if a recurring payment was already made."""
+    amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+    dom = item["day_of_month"]
+    if dom == today_day:
+        day_str = f"срок сегодня ({today_day}-е)"
+    else:
+        days_left = dom - today_day
+        day_str = f"через {days_left} дн. ({dom}-е)"
+
+    # Show up to 2 matching transactions as context
+    tx_lines = []
+    for tx in matches[:2]:
+        tx_date = tx.get("tx_date", "")
+        tx_amt = abs(tx.get("amount") or 0)
+        tx_desc = (tx.get("description") or "")[:40]
+        tx_lines.append(f"  <code>{tx_date}  {tx_amt:,.0f} ₸  {tx_desc}</code>")
+
+    tx_block = "\n".join(tx_lines)
+    text = (
+        f"❓ <b>{item['label']}</b>{amount_str} — {day_str}\n\n"
+        f"Нашёл похожую транзакцию за этот месяц:\n{tx_block}\n\n"
+        "Это оплата данного платежа?"
+    )
+    keyboard = {"inline_keyboard": [[
+        {"text": "✅ Да, оплачено", "callback_data": f"recur_paid:{item['id']}"},
+        {"text": "❌ Нет, не оплачено", "callback_data": f"recur_unpaid:{item['id']}"},
+    ]]}
+    await notifier.send_message(text, reply_markup=keyboard)
 
 
 async def _send_evening_checkin(db, notifier, today: date) -> None:
