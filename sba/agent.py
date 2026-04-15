@@ -22,6 +22,7 @@ from sba.notifier import Notifier
 from sba.integrations import apple_notes, google_tasks, google_calendar
 from sba import research_agent as _research_module
 from sba import finance as _finance_module
+from sba.security import scan_content
 
 logger = logging.getLogger(__name__)
 
@@ -256,11 +257,21 @@ async def _move_drive_file_tool(args: dict[str, Any]) -> dict[str, Any]:
 async def _index_content_tool(args: dict[str, Any]) -> dict[str, Any]:
     if not _db:
         return _ok("DB not initialized")
+    content = args.get("content", "")
+    title = args.get("title", "")
+    threat = scan_content(content) or scan_content(title)
+    if threat:
+        source_id = args.get("source_id", "unknown")
+        warning = f"⚠️ Подозрительный контент заблокирован: {source_id}\nОбнаружено: {threat}"
+        logger.warning("Security: blocked indexing of %s — %s", source_id, threat)
+        if _notifier:
+            await _notifier.send(warning)
+        return _ok(f"Заблокировано: контент содержит подозрительный паттерн ({threat}). Индексация отменена.")
     await _db.index_content(
         source_id=args.get("source_id", ""),
         source_type=args.get("source_type", ""),
-        title=args.get("title", ""),
-        content=args.get("content", ""),
+        title=title,
+        content=content,
         category=args.get("category", ""),
     )
     return _ok("Добавлено в индекс")

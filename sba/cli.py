@@ -221,7 +221,6 @@ def auth_google() -> None:
         build_service(config)
         click.echo("✅ Google authorized successfully (Drive + Tasks)")
         # Clear auth error cooldown flags so next failure will notify again
-        from pathlib import Path
         for flag in (Path.home() / ".sba" / "locks").glob("auth_error_*.flag"):
             flag.unlink(missing_ok=True)
         # Send Telegram confirmation

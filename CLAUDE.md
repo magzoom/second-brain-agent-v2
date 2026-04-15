@@ -93,7 +93,7 @@ cd ~/Desktop/second-brain-agent-v2
 ## Finance модуль
 
 ### Новые таблицы БД (db.py)
-- `fin_accounts` — счета (account_main=Kaspi основной, account_2=Kaspi второй, account_3=Freedom, account_4=Halyk, account_5=RBK/Tayyab, account_biz=Kaspi Business)
+- `fin_accounts` — счета (account_main=Kaspi основной, account_2=Kaspi Депозит, account_3=Freedom, account_4=Halyk, account_5=RBK/Tayyab, account_biz=Kaspi Business, **account_otbasy=ОтбасыБанк**)
 - `fin_transactions` — все транзакции (amount, category, label, source)
 - `fin_liabilities` — обязательства (кредиты, долги людям)
 - `fin_zakat_profile` — профиль закята (year_start, hawl_start)
@@ -178,7 +178,7 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 ## DB — finance методы (db.py)
 
 - `fin_add_transaction(account, amount, tx_type, category, description, tx_date)` — добавить транзакцию
-- `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — проверка дубля по 4 полям
+- `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — точное совпадение по 4 полям + нечёткое по описанию (substring match при совпадении остальных трёх)
 - `fin_get_today_transactions(today_str)` → `list` — все транзакции за дату
 - `fin_get_upcoming_recurring(today_day, days_in_month, current_month=None)` → `list` — платежи после сегодня до конца месяца; если передан current_month — скипает оплаченные (paid_month)
 - `fin_find_matching_transactions(label, amount, month_str, strict=True)` → `list` — ищет expense-транзакции за месяц по совпадению; strict=True: AND(сумма±2%, ключевые слова); strict=False: только ключевые слова (для прошедших платежей с курсовой разницей). Переводы (tx_type=transfer) исключаются. Игнорирует короткие/общие слова: банк, bank, депозит, deposit, платёж, payment, оплата
@@ -196,17 +196,37 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - **Утро 08:00**: снапшот + напоминания о сегодняшних платежах → отдельное сообщение
 - **Вечер 21:00**: чек-ин — сколько транзакций внесено за день, напоминание если 0
 - **Воскресенье 21:00**: дополнительно прогноз до конца месяца (фиксированные + переменные)
-- Исключаемые категории из прогноза: `переводы людям`, `подарки`, `долги`, `семья`
+- Исключаемые категории из прогноза: `переводы людям`, `подарки`, `долги`, `семья`, `кредиты`, `коммуналка`, `подписки`, `интернет`, `сбережения`, `налоги`, `садака`, `корректировка` (фиксированные — не двоятся с разделом fixed)
 - Прогноз требует минимум 1 месяц данных; с < 3 месяцев добавляет пометку «мало данных»
 
 ## Парсинг банковских выписок (bot/handlers.py)
 
-- PDF и TXT файлы с ключевыми словами в имени (kaspi, выписка, halyk, freedom, депозит, statement) → автоматически маршрутизируются на парсинг вместо Drive
+- PDF и TXT: сначала по ключевым словам в имени файла; если UUID/неизвестное имя — `_peek_pdf_text()` читает первые 2000 символов через pdfminer, ищет ≥3 признаков выписки
 - Парсинг через Claude Haiku API (~$0.02/файл, только при ручной отправке)
 - Показывает превью с кнопками `✅ Импортировать / ❌ Отмена`
-- Дубли проверяются по `(account, tx_date, amount, description)` — повторная загрузка той же выписки безопасна
-- Определение счёта по имени файла: gold/kaspi → account_main, депозит/d1000 → account_2, freedom → account_3, halyk → account_4
-- `_pending_statements: dict[chat_id, list]` — временное хранение до подтверждения
+- После импорта: показывает актуальные балансы затронутых счетов (не подсказку)
+- Дубли: точное совпадение (account, tx_date, amount, description) ИЛИ нечёткое (одно описание содержит другое при совпадении суммы/даты/счёта)
+- Определение счёта: по имени файла → по содержимому PDF (`_detect_account_from_content`)
+- Карты/IBAN привязаны к счетам в промпте Haiku → генерирует ОБЕ стороны переводов на РАЗНЫЕ счета
+  - Реквизиты хранятся в `~/.sba/config.yaml` → `finance.account_cards` (не в коде)
+- `_pending_statements: dict[chat_id, list]` — временное хранение до подтверждения; сбрасывается при перезапуске бота
+
+## Security (sba/security.py)
+
+- `scan_content(text)` → `Optional[str]` — сканирует текст перед записью в FTS5
+- 9 паттернов: prompt injection, disregard rules, bypass restrictions, deception, sys_prompt_override, exfil (curl/wget + $SECRET), read_secrets (.env/credentials)
+- Invisible chars: только `\u202e` (RIGHT-TO-LEFT OVERRIDE) — остальные zero-width chars распространены в обычном тексте
+- Интегрирован в `_index_content_tool` — блокирует индексацию + уведомление в Telegram
+
+## Inbox (inbox_processor.py)
+
+- Папки в Inbox теперь обрабатываются (не пропускаются)
+- Логика: Haiku классифицирует по названию/содержимому → `pending_decision` в БД → карточка в Telegram
+- Кнопки: ✅ Категория | 📂 Другая | 🗑 Удалить
+- "📂 Другая" → показывает все 7 категорий
+- "🗑 Удалить" → `add_pending_deletion()` + кнопка подтверждения
+- Папка перемещается целиком (через Drive `parents` update — все файлы внутри переезжают)
+- Резюме "Inbox обработан N" не отправляется (карточки уже отправлены индивидуально)
 
 ## Ключевые паттерны
 

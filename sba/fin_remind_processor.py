@@ -15,8 +15,18 @@ logger = logging.getLogger(__name__)
 
 LOCK_FILE = Path.home() / ".sba" / "locks" / "fin_remind_v2.lock"
 
-# Categories excluded from variable spending forecasts (irregular/uncontrollable)
-_FORECAST_EXCLUDED = {"переводы людям", "подарки", "долги", "семья"}
+# Categories excluded from variable spending forecasts.
+# Includes: social/irregular + fixed recurring costs (already counted in fixed payments section).
+_FORECAST_EXCLUDED = {
+    # Social / irregular
+    "переводы людям", "подарки", "долги", "семья",
+    # Fixed recurring (already in fixed payment section — would double-count)
+    "кредиты", "коммуналка", "подписки", "интернет", "сбережения", "налоги",
+    # Micro-recurring
+    "садака", "Садака",
+    # Artificial balance corrections (not real spending)
+    "корректировка",
+}
 
 
 async def run(config: dict) -> None:

@@ -5,14 +5,18 @@ Sources:
   - Google Drive (changes API with pageToken — incremental sync)
   - Apple Notes folder "Inbox"
 
-Each item is sent to Main Agent for processing.
+Each item is classified by Haiku and sent as a Telegram suggestion card.
+User confirms/picks category via inline buttons; agent is NOT called automatically.
 Uses fcntl-based lock (OS auto-releases on crash).
 """
 
 import asyncio
 import hashlib
+import json
 import logging
 from pathlib import Path
+
+import anthropic
 
 from sba.db import Database, get_db_path
 from sba.lock import acquire_lock, release_lock
@@ -22,6 +26,11 @@ from sba.integrations.google_drive import (
     build_service, get_changes, get_start_page_token,
     list_folder_contents, get_file_content, metadata_hash,
 )
+
+CATEGORIES = [
+    "1_Health_Energy", "2_Business_Career", "3_Finance",
+    "4_Family_Relationships", "5_Personal Growth", "6_Brightness life", "7_Spirituality",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +64,6 @@ async def run(config: dict) -> None:
         raise
     finally:
         release_lock(lock_fd)
-
-    total_cost = sum(cost_log)
-    if cost_log:
-        logger.info(
-            f"Inbox run cost: ${total_cost:.4f} total | "
-            f"{len(cost_log)} agent calls | avg ${total_cost/len(cost_log):.4f}/call"
-        )
 
     await notifier.send_inbox_report(
         processed=stats["processed"],
@@ -107,11 +109,9 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
 
     for file_info in changes:
         mime = file_info.get("mimeType", "")
-        if mime == "application/vnd.google-apps.folder":
-            continue
+        is_folder = (mime == "application/vnd.google-apps.folder")
 
-        # Only process files that are in the Inbox folder (same as v1)
-        # User's normal Drive activity (moves, edits, etc.) should not trigger agent
+        # Only process files/folders that are in the Inbox folder
         parents = file_info.get("parents", [])
         if not inbox_folder_id or inbox_folder_id not in parents:
             continue
@@ -120,15 +120,22 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
         title = file_info.get("name", "Untitled")
         c_hash = metadata_hash(file_info)
 
-        # Skip internal SBA files (summaries created by the agent itself)
+        # Skip internal SBA files
         if title.startswith("_sba"):
             continue
 
-        reg_id, is_new = await db.upsert_file(
-            source="gdrive", source_id=file_id,
-            content_hash=c_hash, title=title,
-            path=file_info.get("webViewLink", ""),
-        )
+        if is_folder:
+            reg_id, is_new = await db.upsert_folder(
+                source="gdrive", source_id=file_id,
+                title=title, path=file_info.get("webViewLink", ""),
+            )
+        else:
+            reg_id, is_new = await db.upsert_file(
+                source="gdrive", source_id=file_id,
+                content_hash=c_hash, title=title,
+                path=file_info.get("webViewLink", ""),
+            )
+
         if not is_new:
             status = await db.get_file_status(reg_id)
             if status != "new":
@@ -140,18 +147,19 @@ async def _process_gdrive(db: Database, notifier: Notifier, config: dict, stats:
             break
 
         content_text = ""
-        try:
-            content_bytes = await asyncio.to_thread(get_file_content, service, file_id, mime)
-            if content_bytes:
-                content_text = content_bytes.decode("utf-8", errors="ignore")
-        except Exception as e:
-            logger.debug(f"Could not download content for '{title}' ({file_id}): {e}")
+        if not is_folder:
+            try:
+                content_bytes = await asyncio.to_thread(get_file_content, service, file_id, mime)
+                if content_bytes:
+                    content_text = content_bytes.decode("utf-8", errors="ignore")
+            except Exception as e:
+                logger.debug(f"Could not download content for '{title}' ({file_id}): {e}")
 
-        await _run_agent_on_item(
+        await _classify_and_suggest(
             db=db, notifier=notifier, config=config,
             source="gdrive", source_id=file_id,
-            title=title, content=content_text, stats=stats,
-            from_inbox=True, reg_id=reg_id,
+            title=title, content=content_text,
+            is_folder=is_folder, reg_id=reg_id, stats=stats,
         )
 
     # Only advance token if we processed the whole batch.
@@ -189,40 +197,46 @@ async def _process_gdrive_inbox_folder(db: Database, notifier: Notifier, config:
             break
 
         mime = file_info.get("mimeType", "")
-        if mime == "application/vnd.google-apps.folder":
-            continue
-
+        is_folder = (mime == "application/vnd.google-apps.folder")
         file_id = file_info.get("id", "")
         title = file_info.get("name", "Untitled")
         c_hash = metadata_hash(file_info)
 
-        # Skip internal SBA files (summaries created by the agent itself)
+        # Skip internal SBA files
         if title.startswith("_sba"):
             continue
 
-        reg_id, is_new = await db.upsert_file(
-            source="gdrive", source_id=file_id,
-            content_hash=c_hash, title=title,
-            path=file_info.get("webViewLink", ""),
-        )
+        if is_folder:
+            reg_id, is_new = await db.upsert_folder(
+                source="gdrive", source_id=file_id,
+                title=title, path=file_info.get("webViewLink", ""),
+            )
+        else:
+            reg_id, is_new = await db.upsert_file(
+                source="gdrive", source_id=file_id,
+                content_hash=c_hash, title=title,
+                path=file_info.get("webViewLink", ""),
+            )
+
         if not is_new:
             status = await db.get_file_status(reg_id)
             if status != "new":
                 continue
 
         content_text = ""
-        try:
-            content_bytes = await asyncio.to_thread(get_file_content, service, file_id, mime)
-            if content_bytes:
-                content_text = content_bytes.decode("utf-8", errors="ignore")
-        except Exception as e:
-            logger.debug(f"Could not download content for '{title}' ({file_id}): {e}")
+        if not is_folder:
+            try:
+                content_bytes = await asyncio.to_thread(get_file_content, service, file_id, mime)
+                if content_bytes:
+                    content_text = content_bytes.decode("utf-8", errors="ignore")
+            except Exception as e:
+                logger.debug(f"Could not download content for '{title}' ({file_id}): {e}")
 
-        await _run_agent_on_item(
+        await _classify_and_suggest(
             db=db, notifier=notifier, config=config,
             source="gdrive", source_id=file_id,
-            title=title, content=content_text, stats=stats,
-            reg_id=reg_id,
+            title=title, content=content_text,
+            is_folder=is_folder, reg_id=reg_id, stats=stats,
         )
 
 
@@ -250,67 +264,92 @@ async def _process_apple_notes(db: Database, notifier: Notifier, config: dict, s
             content_hash=c_hash, title=title,
         )
         if not is_new:
-            # Still in Inbox — retry only if status is not terminal
             status = await db.get_file_status(reg_id)
-            if status in ("processed", "error"):
+            if status in ("processed", "error", "pending_decision"):
                 continue
-            logger.info(f"Apple Notes: retrying stuck note '{title}' (status={status})")
 
-        await _run_agent_on_item(
+        await _classify_and_suggest(
             db=db, notifier=notifier, config=config,
             source="apple_notes", source_id=note_id,
-            title=title, content=content, stats=stats,
-            reg_id=reg_id,
+            title=title, content=content,
+            is_folder=False, reg_id=reg_id, stats=stats,
         )
 
 
-async def _run_agent_on_item(
-    db: Database, notifier: Notifier, config: dict,
-    source: str, source_id: str, title: str, content: str, stats: dict,
-    from_inbox: bool = True, reg_id: int = None,
-) -> None:
-    """Send a single item to Main Agent for processing."""
-    from sba import agent as main_agent
-
-    # Hard cost limit check
-    cost_log: list = stats.get("cost_log", [])
-    current_cost = sum(cost_log)
-    limit = config.get("inbox", {}).get("max_session_cost_usd", 0.0)
-    if limit and current_cost >= limit:
-        if not stats.get("cost_limit_notified"):
-            stats["cost_limit_notified"] = True
-            logger.warning(f"Inbox: cost limit ${limit:.2f} reached (spent ${current_cost:.4f}), stopping")
-            await notifier.send_message(
-                f"⛔ <b>Лимит расходов (${limit:.2f}) исчерпан</b>\n\n"
-                f"Потрачено: ${current_cost:.4f} за {len(cost_log)} вызовов.\n"
-                f"Дальнейшие вызовы заблокированы до следующего запуска inbox.\n\n"
-                f"Чтобы изменить лимит: <code>inbox.max_session_cost_usd</code> в config.yaml"
-            )
-        return
-
-    if from_inbox:
-        message = (
-            f"Обработай входящий элемент.\n"
-            f"Источник: {source}\nID: {source_id}\n"
-            f"Название: {title}\nСодержимое: {content[:2000]}"
-        )
-    else:
-        message = (
-            f"Проиндексируй файл из Google Drive (он уже находится в организованной папке, НЕ перемещай его).\n"
-            f"Источник: {source}\nID: {source_id}\n"
-            f"Название: {title}\nСодержимое: {content[:2000]}"
-        )
-
+async def _classify_item_haiku(title: str, content: str, is_folder: bool, config: dict) -> tuple[str, str]:
+    """
+    Call Claude Haiku to suggest a category and classification.
+    Returns (category, classification). Falls back to safe defaults on error.
+    """
+    prompt = (
+        f"Определи категорию для {'папки' if is_folder else 'файла'}.\n"
+        f"Название: {title}\n"
+        + (f"Содержимое: {content[:400]}\n" if content else "")
+        + f"\nКатегории: {', '.join(CATEGORIES)}\n"
+        f"Тип: info | action | review | trash\n\n"
+        f"Ответь ТОЛЬКО JSON без markdown:\n"
+        f'{{\"category\": \"2_Business_Career\", \"classification\": \"info\"}}'
+    )
     try:
-        await main_agent.run_main_agent(
-            message, db=db, notifier=notifier, config=config,
-            _cost_accumulator=cost_log,
+        client = anthropic.Anthropic(
+            api_key=config.get("anthropic", {}).get("api_key", ""),
+            timeout=20.0,
         )
-        stats["processed"] += 1
-        if reg_id:
-            await db.update_file_status(reg_id, "processed")
+        response = await asyncio.to_thread(
+            client.messages.create,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=80,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = response.content[0].text.strip()
+        # Strip markdown fences if any
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        data = json.loads(raw.strip())
+        category = data.get("category", "2_Business_Career")
+        classification = data.get("classification", "info")
+        if category not in CATEGORIES:
+            category = "2_Business_Career"
+        if classification not in ("info", "action", "review", "trash"):
+            classification = "info"
+        return category, classification
     except Exception as e:
-        logger.error(f"Agent failed for '{title}': {e}")
+        logger.warning(f"Haiku classification failed for '{title}': {e}")
+        return "2_Business_Career", "info"
+
+
+async def _classify_and_suggest(
+    db: Database, notifier: Notifier, config: dict,
+    source: str, source_id: str, title: str, content: str,
+    is_folder: bool, reg_id: int, stats: dict,
+) -> None:
+    """Classify item with Haiku, save suggestion, send Telegram card."""
+    try:
+        category, classification = await _classify_item_haiku(title, content, is_folder, config)
+
+        # Save suggestion to DB (status = pending_decision until user responds)
+        await db.update_file_status(
+            reg_id, "pending_decision",
+            category=category,
+            classification=classification,
+        )
+
+        # Send Telegram suggestion card
+        await notifier.send_inbox_suggestion(
+            reg_id=reg_id,
+            title=title,
+            source=source,
+            suggested_category=category,
+            is_folder=is_folder,
+            classification=classification,
+        )
+
+        stats["processed"] += 1
+        logger.info(f"Inbox suggestion sent: '{title}' → {category} ({classification})")
+
+    except Exception as e:
+        logger.error(f"_classify_and_suggest failed for '{title}': {e}", exc_info=True)
         stats["errors"] += 1
-        if reg_id:
-            await db.update_file_status(reg_id, "error")  # prevent infinite retry
+        await db.update_file_status(reg_id, "error")

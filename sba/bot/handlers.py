@@ -231,12 +231,47 @@ async def handle_voice_input(message: Message, bot: Bot) -> None:
 
 # ── File / photo input ────────────────────────────────────────────────────────
 
-def _is_bank_statement(file_name: str, mime_type: str) -> bool:
+_STATEMENT_CONTENT_KEYWORDS = [
+    "выписка", "statement", "по счёту", "по карте",
+    "halyk", "халык", "kaspi", "каспи", "freedom", "rbk", "отбасы",
+    "ибн", "иин", "бин", "остаток", "пополнение", "списание",
+]
+
+_BANK_HINTS = {
+    "halyk": "account_4",
+    "халык": "account_4",
+    "freedom": "account_3",
+    "kaspi": "account_main",
+    "каспи": "account_main",
+    "rbk": "account_5",
+    "отбасы": "account_otbasy",
+    "отбасыбанк": "account_otbasy",
+}
+
+
+def _peek_pdf_text(path: Path, max_chars: int = 2000) -> str:
+    """Extract first max_chars of text from a PDF using pdfminer."""
+    try:
+        from pdfminer.high_level import extract_text
+        text = extract_text(str(path), maxpages=2)
+        return (text or "")[:max_chars].lower()
+    except Exception:
+        return ""
+
+
+def _is_bank_statement(file_name: str, mime_type: str, file_path: Path | None = None) -> bool:
     """Return True if the file looks like a bank statement (PDF or TXT)."""
     if mime_type not in ("application/pdf", "text/plain"):
         return False
     fn = file_name.lower()
-    return any(k in fn for k in _STATEMENT_KEYWORDS)
+    if any(k in fn for k in _STATEMENT_KEYWORDS):
+        return True
+    # Filename gave no clue — peek into PDF content
+    if mime_type == "application/pdf" and file_path:
+        text = _peek_pdf_text(file_path)
+        matches = sum(1 for k in _STATEMENT_CONTENT_KEYWORDS if k in text)
+        return matches >= 3
+    return False
 
 
 def _detect_account_from_filename(file_name: str) -> str | None:
@@ -250,6 +285,14 @@ def _detect_account_from_filename(file_name: str) -> str | None:
         return "account_4"
     if any(k in fn for k in ["gold", "kaspi", "каспи"]):
         return "account_main"
+    return None
+
+
+def _detect_account_from_content(text: str) -> str | None:
+    """Guess account_id from PDF text content."""
+    for keyword, account in _BANK_HINTS.items():
+        if keyword in text:
+            return account
     return None
 
 
@@ -276,7 +319,7 @@ async def handle_file_input(message: Message, bot: Bot) -> None:
         await bot.download_file(tg_file.file_path, destination=str(tmp_path))
 
         # Bank statement PDF → parse and import instead of uploading to Drive
-        if _is_bank_statement(file_name, mime_type):
+        if _is_bank_statement(file_name, mime_type, tmp_path):
             await _handle_bank_statement(message, bot, tmp_path, file_name)
             return
 
@@ -312,21 +355,54 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
         import json
 
         account = _detect_account_from_filename(file_name)
-        account_hint = f"\nСчёт из имени файла: {account}" if account else ""
+        if not account:
+            pdf_text = _peek_pdf_text(tmp_path)
+            account = _detect_account_from_content(pdf_text)
+        account_hint = f"\nСчёт: {account}" if account else ""
         accounts_info = (
             "account_main=Kaspi основной, account_2=Kaspi Депозит, "
-            "account_3=Freedom Bank, account_4=Halyk, account_5=RBK/Tayyab, account_biz=Kaspi Business"
+            "account_3=Freedom Bank, account_4=Halyk, account_5=RBK/Tayyab, "
+            "account_biz=Kaspi Business, account_otbasy=ОтбасыБанк"
         )
+        _card_labels = {
+            "account_main": "Kaspi основной",
+            "account_2": "Kaspi Депозит",
+            "account_3": "Freedom Bank",
+            "account_4": "Halyk",
+            "account_5": "RBK/Tayyab",
+            "account_biz": "Kaspi Business",
+            "account_otbasy": "ОтбасыБанк",
+        }
+        _account_cards: dict = _config.get("finance", {}).get("account_cards", {})
+        if _account_cards:
+            card_lines = "\n".join(
+                f"- {acc} ({_card_labels.get(acc, acc)}): {hint}"
+                for acc, hint in _account_cards.items()
+            )
+            card_hints = (
+                "Известные реквизиты счетов (используй для определения получателя/отправителя при переводах):\n"
+                + card_lines + "\n"
+            )
+        else:
+            card_hints = ""
         extraction_prompt = (
             f"Извлеки все транзакции из этой банковской выписки.{account_hint}\n"
             f"Счета: {accounts_info}\n\n"
+            f"{card_hints}\n"
             "Верни ТОЛЬКО JSON массив без пояснений:\n"
             '[{"tx_date":"2026-04-01","amount":5000.0,"tx_type":"expense",'
             '"category":"еда","description":"Название операции","account":"account_main"},...]\n\n'
             "Правила:\n"
-            "- tx_type: expense (расход), income (доход), transfer (перевод между своими счетами)\n"
-            "- Переводы между своими счетами → transfer\n"
-            "- Зарплата/поступления → income\n"
+            "- tx_type: expense (расход), income (доход), transfer_out (перевод С этого счёта), transfer_in (перевод НА этот счёт)\n"
+            "- Переводы между своими счетами (перечислены выше): генерируй ДВЕ РАЗНЫЕ записи:\n"
+            "  * ОДНА запись на счёт-источник (откуда ушли деньги): tx_type=transfer_out\n"
+            "  * ОДНА запись на счёт-получатель (куда пришли деньги): tx_type=transfer_in\n"
+            "  * Обе записи — на РАЗНЫЕ счета, никогда не дублируй на одном счёте\n"
+            "  * Если в выписке виден номер карты/IBAN — сопоставь с реквизитами выше для определения второго счёта\n"
+            "  * Пример: выписка по account_main, операция 'С Карт Депозита +170,000' →\n"
+            "    {account: account_2, tx_type: transfer_out, amount: 170000} +\n"
+            "    {account: account_main, tx_type: transfer_in, amount: 170000}\n"
+            "- Зарплата/поступления извне → income\n"
             "- amount: всегда положительное число\n"
             "- Категории: еда, транспорт, кафе, коммуналка, интернет, подписки, "
             "здоровье, красота, одежда, развлечения, сбережения, кредиты, налоги, "
@@ -370,7 +446,7 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
 
         total_exp = sum(t["amount"] for t in transactions if t["tx_type"] == "expense")
         total_inc = sum(t["amount"] for t in transactions if t["tx_type"] == "income")
-        total_tr = sum(t["amount"] for t in transactions if t["tx_type"] == "transfer")
+        total_tr = sum(t["amount"] for t in transactions if t["tx_type"] in ("transfer", "transfer_out", "transfer_in"))
 
         preview_lines = [
             f"🏦 <b>Выписка распознана: {len(transactions)} операций</b>\n",
@@ -445,9 +521,29 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
                 inserted += 1
 
         skip_note = f" ({skipped} дублей пропущено)" if skipped else ""
+
+        # Show current balances of affected accounts
+        affected_accounts = {t.get("account", "account_main") for t in transactions}
+        async with Database(get_db_path(_config)) as db2:
+            rows = await db2.fin_get_accounts()
+        _ACCOUNT_LABELS = {
+            "account_main": "Kaspi основной",
+            "account_2": "Kaspi Депозит",
+            "account_3": "Freedom",
+            "account_4": "Halyk",
+            "account_5": "RBK/Tayyab",
+            "account_biz": "Kaspi Business",
+            "account_otbasy": "ОтбасыБанк",
+        }
+        balance_lines = []
+        for r in rows:
+            if r["name"] in affected_accounts:
+                label = _ACCOUNT_LABELS.get(r["name"], r["name"])
+                balance_lines.append(f"  {label}: {r['balance']:,.0f} ₸")
+        balance_block = "\n".join(balance_lines)
         await callback.message.edit_text(
-            f"✅ Импортировано {inserted} операций{skip_note}.\n"
-            "Если нужно — обнови остатки на счетах: напиши «баланс основного X»"
+            f"✅ Импортировано {inserted} операций{skip_note}.\n\n"
+            f"Балансы счетов:\n{balance_block}"
         )
     except Exception as e:
         logger.error(f"Statement import failed: {e}", exc_info=True)
@@ -670,6 +766,180 @@ async def callback_recur_unpaid(callback: CallbackQuery) -> None:
         )
     except Exception as e:
         logger.warning(f"callback_recur_unpaid edit_text failed: {e}")
+
+
+# ── Inbox suggestion callbacks ───────────────────────────────────────────────
+
+_CATEGORY_KEY_MAP = {
+    "1_Health_Energy": "folder_1_health_energy",
+    "2_Business_Career": "folder_2_business_career",
+    "3_Finance": "folder_3_finance",
+    "4_Family_Relationships": "folder_4_family_relationships",
+    "5_Personal Growth": "folder_5_personal_growth",
+    "6_Brightness life": "folder_6_brightness_life",
+    "7_Spirituality": "folder_7_spirituality",
+}
+
+_CATEGORY_LABELS = {
+    "1_Health_Energy": "🏋 Здоровье",
+    "2_Business_Career": "💼 Карьера",
+    "3_Finance": "💰 Финансы",
+    "4_Family_Relationships": "👨‍👩‍👧 Семья",
+    "5_Personal Growth": "📚 Рост",
+    "6_Brightness life": "✨ Яркость",
+    "7_Spirituality": "🕌 Духовность",
+}
+
+
+async def _do_inbox_move(reg_id: int, category: str) -> str:
+    """Move file/folder to category. Returns result message."""
+    from sba.integrations.google_drive import build_service, move_file_to_folder
+    from sba.integrations import apple_notes as _apple_notes
+
+    async with Database(get_db_path(_config)) as db:
+        row = await db.get_file_by_id(reg_id)
+        if not row:
+            return "⚠️ Запись не найдена"
+
+        source = row["source"]
+        source_id = row["source_id"]
+        title = row["title"]
+
+        try:
+            if source == "gdrive":
+                folder_key = _CATEGORY_KEY_MAP.get(category, "")
+                folder_id = _config.get("google_drive", {}).get(folder_key, "")
+                if not folder_id:
+                    return f"⚠️ Папка для категории {category} не настроена в config.yaml"
+                service = await asyncio.to_thread(build_service, _config)
+                ok = await asyncio.to_thread(move_file_to_folder, service, source_id, folder_id)
+                if not ok:
+                    return f"❌ Не удалось переместить в Drive"
+            elif source == "apple_notes":
+                ok = await asyncio.to_thread(_apple_notes.move_note_by_id, source_id, category)
+                if not ok:
+                    return f"❌ Не удалось переместить заметку"
+
+            await db.update_file_status(reg_id, "processed", category=category)
+            cat_label = _CATEGORY_LABELS.get(category, category)
+            return f"✅ <b>{title}</b>\n→ {cat_label}"
+
+        except Exception as e:
+            logger.error(f"inbox move failed for reg_id={reg_id}: {e}", exc_info=True)
+            return f"❌ Ошибка: {e}"
+
+
+@router.callback_query(F.data.startswith("inbox_ok:"))
+async def callback_inbox_ok(callback: CallbackQuery) -> None:
+    """User agreed with suggested category — move the item."""
+    if not _is_owner_callback(callback):
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    reg_id = int(callback.data.split(":")[1])
+
+    async with Database(get_db_path(_config)) as db:
+        row = await db.get_file_by_id(reg_id)
+
+    if not row or not row.get("category"):
+        try:
+            await callback.message.edit_text("⚠️ Категория не найдена", reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    category = row["category"]
+    result = await _do_inbox_move(reg_id, category)
+    try:
+        await callback.message.edit_text(result, reply_markup=None)
+    except Exception as e:
+        logger.warning(f"callback_inbox_ok edit_text failed: {e}")
+
+
+@router.callback_query(F.data.startswith("inbox_other:"))
+async def callback_inbox_other(callback: CallbackQuery) -> None:
+    """User wants to pick a different category — show all 7."""
+    if not _is_owner_callback(callback):
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    reg_id = int(callback.data.split(":")[1])
+
+    from sba.bot.keyboards import inbox_all_categories_keyboard
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=inbox_all_categories_keyboard(reg_id)
+        )
+    except Exception as e:
+        logger.warning(f"callback_inbox_other edit_reply_markup failed: {e}")
+
+
+@router.callback_query(F.data.startswith("inbox_pick:"))
+async def callback_inbox_pick(callback: CallbackQuery) -> None:
+    """User picked a specific category from the full list."""
+    if not _is_owner_callback(callback):
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    # Format: inbox_pick:{reg_id}:{category}  (category may have spaces)
+    parts = callback.data.split(":", 2)
+    reg_id = int(parts[1])
+    category = parts[2]
+
+    result = await _do_inbox_move(reg_id, category)
+    try:
+        await callback.message.edit_text(result, reply_markup=None)
+    except Exception as e:
+        logger.warning(f"callback_inbox_pick edit_text failed: {e}")
+
+
+@router.callback_query(F.data.startswith("inbox_del:"))
+async def callback_inbox_del(callback: CallbackQuery) -> None:
+    """User chose to delete the inbox item — request deletion confirmation."""
+    if not _is_owner_callback(callback):
+        return
+    try:
+        await callback.answer()
+    except Exception:
+        pass
+    reg_id = int(callback.data.split(":")[1])
+
+    async with Database(get_db_path(_config)) as db:
+        row = await db.get_file_by_id(reg_id)
+        if not row:
+            try:
+                await callback.message.edit_text("⚠️ Запись не найдена", reply_markup=None)
+            except Exception:
+                pass
+            return
+
+        deletion_id = await db.add_pending_deletion(file_id=reg_id)
+
+    from sba.notifier import Notifier
+    notifier = Notifier(_config)
+    msg_id = await notifier.send_deletion_request(
+        deletion_id=deletion_id,
+        item_title=row["title"],
+        item_source=row["source"],
+        reason="Запрошено из inbox",
+    )
+    if msg_id:
+        async with Database(get_db_path(_config)) as db:
+            await db.set_deletion_telegram_msg(deletion_id, msg_id)
+
+    try:
+        await callback.message.edit_text(
+            f"🗑 <b>{row['title']}</b>\nЗапрос на удаление отправлен.",
+            reply_markup=None,
+        )
+    except Exception as e:
+        logger.warning(f"callback_inbox_del edit_text failed: {e}")
 
 
 # ── Deletion callbacks ────────────────────────────────────────────────────────

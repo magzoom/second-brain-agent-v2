@@ -72,13 +72,74 @@ class Notifier:
             logger.error(f"Failed to send inline keyboard message: {e}")
             return False
 
+    async def send_inbox_suggestion(
+        self,
+        reg_id: int,
+        title: str,
+        source: str,
+        suggested_category: str,
+        is_folder: bool = False,
+        classification: str = "info",
+    ) -> Optional[int]:
+        """Send inbox item suggestion card with [✅ Category] [📂 Other] [🗑 Delete] buttons."""
+        if not self._enabled:
+            return None
+
+        _CATEGORY_LABELS = {
+            "1_Health_Energy": "🏋 Здоровье",
+            "2_Business_Career": "💼 Карьера",
+            "3_Finance": "💰 Финансы",
+            "4_Family_Relationships": "👨‍👩‍👧 Семья",
+            "5_Personal Growth": "📚 Рост",
+            "6_Brightness life": "✨ Яркость",
+            "7_Spirituality": "🕌 Духовность",
+        }
+        _CLASS_LABELS = {
+            "action": "⚡ Действие",
+            "review": "👀 Просмотр",
+            "info": "📋 Информация",
+            "trash": "🗑 Мусор",
+        }
+
+        icon = "📁" if is_folder else "📄"
+        source_label = "Google Drive" if source == "gdrive" else "Apple Notes"
+        cat_label = _CATEGORY_LABELS.get(suggested_category, suggested_category)
+        class_label = _CLASS_LABELS.get(classification, classification)
+
+        text = (
+            f"{icon} <b>{title}</b>\n"
+            f"📦 {source_label} · {class_label}\n\n"
+            f"💡 Предлагаю: <b>{cat_label}</b>"
+        )
+
+        inline_keyboard = {"inline_keyboard": [[
+            {"text": f"✅ {cat_label}", "callback_data": f"inbox_ok:{reg_id}"},
+            {"text": "📂 Другая", "callback_data": f"inbox_other:{reg_id}"},
+            {"text": "🗑 Удалить", "callback_data": f"inbox_del:{reg_id}"},
+        ]]}
+
+        url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id, "text": text,
+            "parse_mode": "HTML", "reply_markup": inline_keyboard,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    data = await resp.json()
+                    if data.get("ok"):
+                        return data["result"]["message_id"]
+                    logger.error(f"send_inbox_suggestion failed: {data}")
+                    return None
+        except Exception as e:
+            logger.error(f"send_inbox_suggestion failed: {e}")
+            return None
+
     async def send_inbox_report(self, processed: int, errors: int = 0) -> None:
-        if processed == 0 and errors == 0:
-            return
-        parts = [f"✅ <b>Inbox обработан</b>\n📋 Обработано: {processed}"]
+        # Individual suggestion cards are sent per item — summary is redundant.
+        # Only notify on errors.
         if errors:
-            parts.append(f"❌ Ошибок: {errors}")
-        await self.send("\n".join(parts))
+            await self.send(f"⚠️ <b>Inbox завершён с ошибками</b>\n❌ Ошибок: {errors}")
 
     async def send_legacy_report(self, processed: int, actions_created: int, pending_deletions: int, errors: int = 0, folders_decided: int = 0) -> None:
         # Folder/note cards are sent individually — no summary needed

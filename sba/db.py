@@ -234,6 +234,7 @@ def _create_tables(conn: sqlite3.Connection) -> None:
         ("account_4",     "Счёт 4",         0.0),
         ("account_5",     "Счёт 5",         0.0),
         ("account_biz",   "Бизнес счёт",    0.0),
+        ("account_otbasy", "ОтбасыБанк",    0.0),
     ]
     for n, l, b in _accounts:
         conn.execute(
@@ -755,7 +756,7 @@ class Database:
 
         # Update account balance atomically with the insert
         if account:
-            if tx_type in ("income", "debt_taken"):
+            if tx_type in ("income", "debt_taken", "transfer_in"):
                 await self._conn.execute(
                     "UPDATE fin_accounts SET balance=balance+?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
                     (amount, account),
@@ -765,6 +766,7 @@ class Database:
                     "UPDATE fin_accounts SET balance=balance-?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
                     (amount, account),
                 )
+            # tx_type='transfer' (legacy/unknown direction): no balance change
         await self._conn.commit()
         return tx_id
 
@@ -1021,14 +1023,36 @@ class Database:
         await self._conn.commit()
 
     async def fin_transaction_exists(self, account: str, tx_date: str, amount: float, description: str) -> bool:
-        """Return True if a transaction with same account/date/amount/description already exists."""
+        """Return True if a transaction with same account/date/amount/description already exists.
+
+        Also catches duplicates where description differs slightly: if a record with same
+        account/date/amount/tx_type exists and descriptions overlap (one contains the other),
+        treat as duplicate.
+        """
+        # Exact match first
         async with self._conn.execute(
             """SELECT 1 FROM fin_transactions
                WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01 AND description=?
                LIMIT 1""",
             (account, tx_date, amount, description),
         ) as cur:
-            return await cur.fetchone() is not None
+            if await cur.fetchone():
+                return True
+        # Fuzzy match: same account/date/amount, description is substring of existing or vice versa
+        desc_lower = (description or "").lower().strip()
+        if desc_lower:
+            async with self._conn.execute(
+                """SELECT description FROM fin_transactions
+                   WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01
+                   LIMIT 10""",
+                (account, tx_date, amount),
+            ) as cur:
+                rows = await cur.fetchall()
+            for row in rows:
+                existing = (row[0] or "").lower().strip()
+                if existing and (desc_lower in existing or existing in desc_lower):
+                    return True
+        return False
 
     async def fin_get_today_transactions(self, today_str: str) -> list:
         """Return all transactions for a specific date."""

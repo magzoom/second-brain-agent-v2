@@ -48,6 +48,11 @@ ACCOUNT_ALIASES: dict[str, str] = {
     "бизнес":        "account_biz",
     "business":      "account_biz",
     "account_biz":   "account_biz",
+    # account_otbasy
+    "отбасы":        "account_otbasy",
+    "отбасыбанк":    "account_otbasy",
+    "otbasy":        "account_otbasy",
+    "account_otbasy": "account_otbasy",
 }
 
 LIABILITY_ALIASES: dict[str, str] = {
