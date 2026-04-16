@@ -30,7 +30,9 @@ _FORECAST_EXCLUDED = {
 
 
 async def run(config: dict) -> None:
-    from sba.lock import acquire_lock, release_lock
+    from sba.lock import acquire_lock, release_lock, wait_if_dev_active
+    if not wait_if_dev_active():
+        return
     lock_fd = acquire_lock(LOCK_FILE)
     try:
         await _run(config)

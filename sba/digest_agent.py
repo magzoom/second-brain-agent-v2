@@ -317,6 +317,10 @@ async def _prefetch_data(config: dict, hours_back: int = 16) -> tuple[str, str]:
 
 async def run_digest(notifier, config: dict) -> None:
     """Run the morning digest agent. Called by `sba digest` CLI command."""
+    from sba.lock import wait_if_dev_active
+    if not wait_if_dev_active():
+        return
+
     setup(notifier, config)
     model = config.get("classifier", {}).get("model", "claude-haiku-4-5-20251001")
     api_key = config.get("anthropic", {}).get("api_key", "")

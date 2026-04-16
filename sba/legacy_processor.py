@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 from sba.db import Database, get_db_path
-from sba.lock import acquire_lock, release_lock
+from sba.lock import acquire_lock, release_lock, wait_if_dev_active
 from sba.notifier import Notifier
 from sba.integrations import apple_notes, google_tasks
 from sba.integrations.google_drive import (
@@ -31,6 +31,9 @@ LOCK_FILE = Path.home() / ".sba" / "locks" / "legacy_v2.lock"
 
 async def run(config: dict) -> None:
     """Main entry point for legacy processing."""
+    if not wait_if_dev_active():
+        return
+
     notifier = Notifier(config)
     db_path = get_db_path(config)
     lock_fd = acquire_lock(LOCK_FILE)

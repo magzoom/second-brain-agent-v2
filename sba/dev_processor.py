@@ -126,6 +126,30 @@ Do not modify any other files. Do not restart the bot."""
 
     if status == "ready":
         logging.info(f"Tool {tool_name} ready, saving resume and restarting bot")
+        # Auto-commit the new/updated tool (no sensitive data check needed — agent.py has no secrets)
+        git_env = {
+            **os.environ,
+            "HOME": str(Path.home()),
+            "PATH": f"{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+            "GIT_AUTHOR_NAME": "SBA Dev Bot",
+            "GIT_COMMITTER_NAME": "SBA Dev Bot",
+            "GIT_AUTHOR_EMAIL": "sba@local",
+            "GIT_COMMITTER_EMAIL": "sba@local",
+        }
+        subprocess.run(
+            ["git", "add", "sba/agent.py"],
+            cwd=str(PROJECT_DIR), capture_output=True, env=git_env,
+        )
+        commit_result = subprocess.run(
+            ["git", "commit", "-m",
+             f"feat: add {tool_name} tool via CC auto-development\n\nCo-Authored-By: Claude Code <noreply@anthropic.com>"],
+            cwd=str(PROJECT_DIR), capture_output=True, text=True, env=git_env,
+        )
+        if commit_result.returncode == 0:
+            logging.info(f"Auto-committed {tool_name} tool")
+        else:
+            logging.warning(f"Git commit skipped: {commit_result.stderr[:200]}")
+
         # Save resume context
         if resume_message:
             RESUME_FILE.write_text(json.dumps({

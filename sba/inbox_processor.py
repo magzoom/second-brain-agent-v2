@@ -19,7 +19,7 @@ from pathlib import Path
 import anthropic
 
 from sba.db import Database, get_db_path
-from sba.lock import acquire_lock, release_lock
+from sba.lock import acquire_lock, release_lock, wait_if_dev_active
 from sba.notifier import Notifier
 from sba.integrations import apple_notes
 from sba.integrations.google_drive import (
@@ -42,6 +42,9 @@ async def run(config: dict) -> None:
     # Check pause flag
     if (Path.home() / ".sba" / "PAUSED").exists():
         logger.info("Inbox: paused, skipping")
+        return
+
+    if not wait_if_dev_active():
         return
 
     notifier = Notifier(config)
