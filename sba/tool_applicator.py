@@ -12,7 +12,7 @@ _BACKUP_PY = _AGENT_PY.with_suffix(".py.bak")
 
 # Stable markers for the three insertion points
 _MARKER_FN = "\n_main_server = create_sdk_mcp_server("
-_MARKER_TOOLS = "        _propose_extension_tool,\n    ],"
+_MARKER_TOOLS = "        _propose_tool_addition_tool,\n    ],"
 _MARKER_ALLOWED = '            "mcp__sba__propose_capability_extension",'
 
 
@@ -58,7 +58,7 @@ def apply_pending_tool(tool_name: str, tool_fn_name: str, tool_code: str) -> tup
         # Add function reference to tools=[]
         new_content = new_content.replace(
             _MARKER_TOOLS,
-            f"        _propose_extension_tool,\n        {tool_fn_name},\n    ],",
+            f"        _propose_tool_addition_tool,\n        {tool_fn_name},\n    ],",
         )
 
         # Add mcp tool name to allowed_tools
