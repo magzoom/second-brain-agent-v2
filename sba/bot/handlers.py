@@ -55,13 +55,17 @@ def setup(config: dict) -> None:
 _RESUME_FILE = Path.home() / ".sba" / "bot_resume.json"
 
 
-def _save_resume(chat_id: int, message_text: str) -> None:
+_MAX_RESUME_RETRIES = 2
+
+
+def _save_resume(chat_id: int, message_text: str, retry_count: int = 0) -> None:
     """Save pending resume context before bot restart."""
     import json, time
     _RESUME_FILE.write_text(json.dumps({
         "chat_id": chat_id,
         "message": message_text,
         "ts": time.time(),
+        "retry_count": retry_count,
     }), encoding="utf-8")
 
 
@@ -1016,9 +1020,16 @@ async def callback_ext_ok(callback: CallbackQuery) -> None:
     )
 
     def _restart(save_resume: bool = True) -> None:
-        import subprocess as sp, os
+        import subprocess as sp, os, json
         if save_resume and last_user_msg:
-            _save_resume(chat_id, last_user_msg)
+            # Read current retry count from existing resume file (if any)
+            existing_retry = 0
+            if _RESUME_FILE.exists():
+                try:
+                    existing_retry = json.loads(_RESUME_FILE.read_text()).get("retry_count", 0)
+                except Exception:
+                    pass
+            _save_resume(chat_id, last_user_msg, retry_count=existing_retry + 1)
         sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
 
     try:
@@ -1124,7 +1135,14 @@ async def callback_tool_apply_ok(callback: CallbackQuery) -> None:
     pending_file.unlink(missing_ok=True)
 
     if resume_message:
-        _save_resume(callback.message.chat.id, resume_message)
+        import json as _json
+        existing_retry = 0
+        if _RESUME_FILE.exists():
+            try:
+                existing_retry = _json.loads(_RESUME_FILE.read_text()).get("retry_count", 0)
+            except Exception:
+                pass
+        _save_resume(callback.message.chat.id, resume_message, retry_count=existing_retry + 1)
 
     await callback.message.edit_text(
         f"✅ Инструмент <code>{tool_name}</code> добавлен в агента.\n\n"

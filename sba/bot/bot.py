@@ -19,11 +19,19 @@ async def _send_resume(bot: Bot, resume: dict, config: dict) -> None:
     await asyncio.sleep(2)  # let polling settle
     chat_id = resume.get("chat_id")
     text = resume.get("message", "")
+    retry_count = resume.get("retry_count", 0)
     if not chat_id or not text:
         return
+    from sba.bot.handlers import _run_agent, _MAX_RESUME_RETRIES
+    if retry_count > _MAX_RESUME_RETRIES:
+        await bot.send_message(
+            chat_id,
+            f"⚠️ Не удалось выполнить запрос автоматически после {retry_count} попыток.\n\n"
+            f"Запрос: <i>{text[:200]}</i>\n\nПопробуй отправить вручную или обратись к разработчику."
+        )
+        return
     try:
-        status = await bot.send_message(chat_id, f"↩️ Продолжаю выполнение:\n<i>{text[:200]}</i>")
-        from sba.bot.handlers import _run_agent
+        status = await bot.send_message(chat_id, f"↩️ Продолжаю выполнение (попытка {retry_count}):\n<i>{text[:200]}</i>")
         await _run_agent(status, text, status, timeout=300)
     except Exception as e:
         logger.error(f"Resume failed: {e}", exc_info=True)
