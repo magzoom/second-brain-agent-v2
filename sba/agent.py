@@ -766,277 +766,76 @@ async def _propose_extension_tool(args: dict[str, Any]) -> dict[str, Any]:
         await _notifier.send_message(text, reply_markup=keyboard)
     return _ok(f"Предложение #{ext_id} отправлено. Жду подтверждения.")
 
+
 @tool("get_youtube_transcript",
-    "Получить транскрипт (субтитры) YouTube видео по URL. Возвращает полный текст с временными метками.",
+    "Получить полный текстовый транскрипт YouTube-видео по его URL.",
     {
         "type": "object",
         "properties": {
-            "url": {"type": "string", "description": "Ссылка на YouTube видео (youtu.be/... или youtube.com/watch?v=...)"},
-            "language": {"type": "string", "description": "Код языка субтитров, например 'ru' или 'en'. По умолчанию — автовыбор.", "default": ""},
-            "include_timestamps": {"type": "boolean", "description": "Включать ли временные метки в вывод. По умолчанию False.", "default": False},
+            "video_url": {"type": "string", "description": "URL YouTube-видео"},
         },
-        "required": ["url"],
+        "required": ["video_url"],
     }
 )
 async def _get_youtube_transcript_tool(args: dict) -> dict:
     import re
-    import asyncio
+    import asyncio as _asyncio
 
-    url = args.get("url", "").strip()
-    language = args.get("language", "")
-    include_timestamps = args.get("include_timestamps", False)
+    video_url = args.get("video_url", "")
 
     # Extract video ID
-    m = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", url)
-    if not m:
-        return _ok("Не удалось извлечь ID видео из URL. Передай полную ссылку на YouTube.")
-    video_id = m.group(1)
+    match = re.search(r'(?:v=|youtu\.be/|/v/|/embed/)([A-Za-z0-9_-]{11})', video_url)
+    if not match:
+        return _ok("Ошибка: не удалось извлечь ID видео из URL.")
+    video_id = match.group(1)
 
-    # Method 1: youtube-transcript-api (manual + auto-generated subtitles)
-    try:
+    def _fetch_transcript(vid_id: str):
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 
-        def _fetch_transcript():
-            ytt = YouTubeTranscriptApi()
-            preferred_langs = ([language] if language else []) + ["ru", "en", "en-US", "en-GB"]
-
-            try:
-                transcript_list = ytt.list_transcripts(video_id)
-                candidates = list(transcript_list)
-
-                for lang in preferred_langs:
-                    try:
-                        return transcript_list.find_manually_created_transcript([lang]).fetch()
-                    except Exception:
-                        continue
-
-                for lang in preferred_langs:
-                    try:
-                        return transcript_list.find_generated_transcript([lang]).fetch()
-                    except Exception:
-                        continue
-
-                for t in candidates:
-                    try:
-                        return t.fetch()
-                    except Exception:
-                        continue
-            except Exception:
-                pass
-
-            try:
-                return ytt.fetch(video_id, languages=preferred_langs, skip_html_cleaning=True)
-            except TypeError:
-                pass
-            except Exception:
-                pass
-
-            return ytt.fetch(video_id, languages=preferred_langs)
-
         try:
-            transcript = await asyncio.to_thread(_fetch_transcript)
+            transcript_list = YouTubeTranscriptApi.list_transcripts(vid_id)
+        except TranscriptsDisabled:
+            return None, None, "Субтитры недоступны для этого видео"
+        except Exception as e:
+            return None, None, f"Ошибка получения транскрипта: {e}"
 
-            def _entry_text(s):
-                if hasattr(s, "text"):
-                    return s.text
-                if isinstance(s, dict):
-                    return s.get("text", "")
-                return str(s)
-
-            def _entry_start(s):
-                if hasattr(s, "start"):
-                    return int(s.start)
-                if isinstance(s, dict):
-                    return int(s.get("start", 0))
-                return 0
-
-            if include_timestamps:
-                lines = [f"[{_entry_start(s)}s] {_entry_text(s)}" for s in transcript]
-            else:
-                lines = [_entry_text(s) for s in transcript]
-            full_text = "\n".join(lines)
-            return _ok(f"Транскрипт видео {video_id}:\n\n{full_text}")
-        except (NoTranscriptFound, TranscriptsDisabled):
-            pass
+        # Try manual first, then auto-generated; prefer any language
+        transcript = None
+        lang = None
+        try:
+            transcript = transcript_list.find_manually_created_transcript(
+                [t.language_code for t in transcript_list._manually_created_transcripts.values()]
+            )
+            lang = transcript.language_code
         except Exception:
             pass
 
-    except ImportError:
-        pass
-
-    # Method 2: yt-dlp subtitles (VTT) — включая автоматически сгенерированные
-    _yt_dlp_available = False
-    try:
-        import subprocess
-        import tempfile
-        import os
-        import glob as _glob
-
-        _yt_dlp_available = True
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lang_str = language if language else "ru,en,ru-RU,en-US"
-            cmd = [
-                "yt-dlp",
-                "--write-subs",
-                "--write-auto-subs",
-                "--skip-download",
-                "--sub-format", "vtt",
-                "--no-playlist",
-                "--add-header", "User-Agent:Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "--sub-lang", lang_str,
-                "--output", os.path.join(tmpdir, "%(id)s"),
-                url,
-            ]
-
-            await asyncio.to_thread(
-                lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            )
-
-            vtt_files = _glob.glob(os.path.join(tmpdir, "*.vtt"))
-            if vtt_files:
-                vtt_path = vtt_files[0]
-                with open(vtt_path, "r", encoding="utf-8") as f:
-                    raw = f.read()
-
-                cue_lines = []
-                seen = set()
-                in_cue = False
-                timestamp_re = re.compile(r"^\d{2}:\d{2}:\d{2}")
-                for line in raw.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith(("WEBVTT", "NOTE", "Kind:", "Language:")):
-                        in_cue = False
-                        continue
-                    if timestamp_re.match(line):
-                        in_cue = True
-                        continue
-                    if in_cue and line:
-                        clean = re.sub(r"<[^>]+>", "", line).strip()
-                        if clean and clean not in seen:
-                            seen.add(clean)
-                            cue_lines.append(clean)
-
-                if cue_lines:
-                    full_text = "\n".join(cue_lines)
-                    return _ok(f"Транскрипт видео {video_id} (субтитры yt-dlp):\n\n{full_text}")
-
-    except FileNotFoundError:
-        _yt_dlp_available = False
-    except Exception:
-        pass
-
-    # Method 3: yt-dlp audio download + OpenAI Whisper API transcription
-    if not _yt_dlp_available:
-        return _ok(
-            "Субтитры для этого видео недоступны, и yt-dlp не установлен.\n"
-            "Установи: pip install yt-dlp youtube-transcript-api\n"
-            "Для транскрипции через аудио также нужен OpenAI API ключ в ~/.sba/config.yaml (openai.api_key)."
-        )
-
-    try:
-        import subprocess
-        import tempfile
-        import os
-        import glob as _glob2
-
-        openai_api_key = (
-            _config.get("openai", {}).get("api_key", "")
-            or os.environ.get("OPENAI_API_KEY", "")
-        )
-        if not openai_api_key:
-            return _ok(
-                "Субтитры для этого видео полностью недоступны.\n"
-                "Для транскрипции через аудио добавь ключ OpenAI в ~/.sba/config.yaml:\n"
-                "  openai:\n    api_key: sk-..."
-            )
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            audio_out = os.path.join(tmpdir, "audio.%(ext)s")
-            cmd = [
-                "yt-dlp",
-                "-f", "bestaudio[filesize<24M]/bestaudio",
-                "--extract-audio",
-                "--audio-format", "mp3",
-                "--audio-quality", "5",
-                "--no-playlist",
-                "--add-header", "User-Agent:Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "--output", audio_out,
-                url,
-            ]
-
-            proc = await asyncio.to_thread(
-                lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            )
-
-            audio_files = _glob2.glob(os.path.join(tmpdir, "audio.*"))
-            if not audio_files:
-                stderr = proc.stderr[-500:] if proc.stderr else ""
-                return _ok(f"Не удалось скачать аудио. Видео недоступно или заблокировано.\n{stderr}")
-
-            audio_file = audio_files[0]
-            file_size = os.path.getsize(audio_file)
-            if file_size > 25 * 1024 * 1024:
-                return _ok(
-                    "Аудиофайл превышает 25MB — лимит Whisper API. "
-                    "Видео слишком длинное для транскрипции через аудио."
-                )
-
-            # Transcribe via OpenAI Whisper API
-            transcript_text = ""
+        if transcript is None:
             try:
-                import openai
-                client = openai.AsyncOpenAI(api_key=openai_api_key)
-                with open(audio_file, "rb") as f:
-                    whisper_kwargs: dict = {"file": f, "model": "whisper-1"}
-                    if language:
-                        whisper_kwargs["language"] = language
-                    response = await client.audio.transcriptions.create(**whisper_kwargs)
-                transcript_text = response.text
-            except ImportError:
-                # Fallback: raw multipart POST via urllib
-                import urllib.request
-                import json as _json
-
-                with open(audio_file, "rb") as f:
-                    audio_data = f.read()
-
-                boundary = "----SBAWhisperBoundary7MA4YWxk"
-                ext = os.path.splitext(audio_file)[1] or ".mp3"
-                parts = [
-                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n".encode(),
-                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio{ext}\"\r\nContent-Type: audio/mpeg\r\n\r\n".encode(),
-                    audio_data,
-                    f"\r\n--{boundary}--\r\n".encode(),
-                ]
-                if language:
-                    parts.insert(1, f"--{boundary}\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\n{language}\r\n".encode())
-                body = b"".join(parts)
-
-                req = urllib.request.Request(
-                    "https://api.openai.com/v1/audio/transcriptions",
-                    data=body,
-                    headers={
-                        "Authorization": f"Bearer {openai_api_key}",
-                        "Content-Type": f"multipart/form-data; boundary={boundary}",
-                    },
-                    method="POST",
+                transcript = transcript_list.find_generated_transcript(
+                    [t.language_code for t in transcript_list._generated_transcripts.values()]
                 )
+                lang = transcript.language_code
+            except Exception:
+                pass
 
-                def _do_whisper():
-                    with urllib.request.urlopen(req, timeout=120) as resp:
-                        return _json.loads(resp.read().decode())
+        if transcript is None:
+            return None, None, "Субтитры недоступны для этого видео"
 
-                result = await asyncio.to_thread(_do_whisper)
-                transcript_text = result.get("text", "")
+        try:
+            entries = transcript.fetch()
+        except Exception as e:
+            return None, None, f"Ошибка загрузки транскрипта: {e}"
 
-            if not transcript_text:
-                return _ok("Whisper вернул пустой результат. Возможно видео не содержит речи.")
+        full_text = " ".join(entry.get("text", "") for entry in entries)
+        return full_text, lang, None
 
-            return _ok(f"Транскрипт видео {video_id} (Whisper API, аудио):\n\n{transcript_text}")
+    full_text, language, error = await _asyncio.to_thread(_fetch_transcript, video_id)
 
-    except Exception as e:
-        return _ok(f"Ошибка транскрипции через аудио: {e}")
+    if error:
+        return _ok(error)
+
+    return _ok(f"language: {language}\n\nfull_transcript:\n{full_text}")
 
 
 # ── MCP servers ───────────────────────────────────────────────────────────────
@@ -1118,11 +917,16 @@ Claude Code разработает инструмент автоматическ
    - Нет → вызови propose_capability_extension
    - Да → объясни и попроси данные явно
 
-Путь В — инструмент существует, но вернул ошибку или не справился с задачей:
+Путь В — инструмент существует, но вернул техническую ошибку (Exception, сбой, пустой результат):
 → НЕ объясняй пользователю как сделать вручную. НЕ сдавайся.
 → Вызови request_capability_development с тем же tool_name, опиши ошибку и что нужно улучшить (альтернативный метод, обход блокировки, другая библиотека и т.п.).
 → Примеры: get_youtube_transcript вернул ошибку блокировки → попроси добавить yt-dlp как fallback; инструмент вернул пустой результат → попроси улучшить логику.
 Claude Code исправит инструмент автоматически и бот перезапустится.
+
+ВАЖНО — Путь В НЕ применяется если:
+- Инструмент вернул осознанный ответ "нет ключа API / не настроено / не установлено" → это Путь Б (propose_capability_extension) или честный ответ пользователю
+- Инструмент вернул "субтитры недоступны для этого видео" → это нормальный результат, ответь пользователю напрямую
+- Инструмент вернул данные, но они не устроили пользователя → это не ошибка инструмента
 
 КРИТИЧНО: после вызова request_capability_development или propose_capability_extension — НЕМЕДЛЕННО СТОП. Не повторяй. Жди.
 
