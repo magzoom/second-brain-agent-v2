@@ -770,42 +770,117 @@ async def _get_youtube_transcript_tool(args: dict[str, Any]) -> dict[str, Any]:
             entries = None
 
     if entries is None:
+        import re as _re2
+
+        async def _try_ytdlp(vid_id: str):
+            """Fallback: get subtitles via yt-dlp when youtube-transcript-api is blocked."""
+            import tempfile
+            import os
+            try:
+                import yt_dlp as _yt_dlp
+            except ImportError:
+                return None, None
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ydl_opts = {
+                    "skip_download": True,
+                    "writeautomaticsub": True,
+                    "writesubtitles": True,
+                    "subtitleslangs": ["ru", "en"],
+                    "subtitlesformat": "vtt",
+                    "outtmpl": os.path.join(tmpdir, "%(id)s"),
+                    "quiet": True,
+                    "no_warnings": True,
+                }
+                try:
+                    def _run():
+                        with _yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            ydl.download([f"https://www.youtube.com/watch?v={vid_id}"])
+                    await asyncio.to_thread(_run)
+                except Exception:
+                    return None, None
+                vtt_files = sorted([f for f in os.listdir(tmpdir) if f.endswith(".vtt")])
+                if not vtt_files:
+                    return None, None
+                vtt_path = os.path.join(tmpdir, vtt_files[0])
+                parts = vtt_files[0].replace(".vtt", "").split(".")
+                lang_code = parts[-1] if len(parts) >= 2 else "unknown"
+                try:
+                    vtt_text = open(vtt_path, encoding="utf-8").read()
+                except Exception:
+                    return None, None
+                ents = []
+                seen_texts: set = set()
+                for block in vtt_text.split("\n\n"):
+                    block_lines = block.strip().split("\n")
+                    ts_line = None
+                    text_lines = []
+                    for ln in block_lines:
+                        if "-->" in ln:
+                            ts_line = ln
+                        elif ln and not ln.startswith("WEBVTT") and not ln.startswith("NOTE") and not ln.isdigit():
+                            text_lines.append(ln)
+                    if ts_line and text_lines:
+                        tm = _re2.match(
+                            r"(\d+):(\d+):(\d+)[.,](\d+)\s*-->\s*(\d+):(\d+):(\d+)[.,](\d+)",
+                            ts_line.strip(),
+                        )
+                        if tm:
+                            h1, m1, s1 = int(tm.group(1)), int(tm.group(2)), int(tm.group(3))
+                            h2, m2, s2 = int(tm.group(5)), int(tm.group(6)), int(tm.group(7))
+                            start = h1 * 3600 + m1 * 60 + s1 + int(tm.group(4)) / 1000
+                            end   = h2 * 3600 + m2 * 60 + s2 + int(tm.group(8)) / 1000
+                            raw_text = " ".join(text_lines)
+                            clean = _re2.sub(r"<[^>]+>", "", raw_text).strip()
+                            if clean and clean not in seen_texts:
+                                seen_texts.add(clean)
+                                ents.append({"text": clean, "start": start, "duration": end - start})
+                return (ents or None), f"{lang_code} (авто/yt-dlp)"
+
         try:
             from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
         except ImportError:
             return _ok("Библиотека youtube-transcript-api не установлена. Вызови propose_capability_extension для установки пакета youtube-transcript-api.")
 
+        _ytapi_ok = False
+        _ip_blocked = False
         try:
             api = YouTubeTranscriptApi()
             transcript_list = await asyncio.to_thread(api.list, video_id)
+            transcript = None
+            for lang in ("ru", "en"):
+                try:
+                    transcript = transcript_list.find_transcript([lang])
+                    break
+                except NoTranscriptFound:
+                    continue
+            if transcript is None:
+                try:
+                    transcript = next(iter(transcript_list))
+                except StopIteration:
+                    return _ok(f"Субтитры не найдены для {video_id}.")
+            fetched = await asyncio.to_thread(transcript.fetch)
+            entries = fetched.to_raw_data()
+            lang_info = f"{transcript.language_code} ({'авто' if transcript.is_generated else 'ручные'})"
+            _ytapi_ok = True
         except TranscriptsDisabled:
             return _ok(f"Субтитры отключены для видео {video_id}.")
         except Exception as e:
-            return _ok(f"Не удалось получить субтитры для {video_id}: {e}")
+            err_str = str(e).lower()
+            if any(kw in err_str for kw in ("blocked", "ipblocked", "requestblocked", "too many", "429")):
+                _ip_blocked = True
+            else:
+                return _ok(f"Не удалось получить субтитры для {video_id}: {e}")
 
-        transcript = None
-        for lang in ("ru", "en"):
-            try:
-                transcript = transcript_list.find_transcript([lang])
-                break
-            except NoTranscriptFound:
-                continue
-        if transcript is None:
-            try:
-                transcript = next(iter(transcript_list))
-            except StopIteration:
-                return _ok(f"Субтитры не найдены для {video_id}.")
-
-        try:
-            fetched = await asyncio.to_thread(transcript.fetch)
-            entries = fetched.to_raw_data()
-        except Exception as e:
-            return _ok(f"Не удалось загрузить субтитры: {e}")
+        if not _ytapi_ok and _ip_blocked:
+            _dlp_entries, _dlp_lang = await _try_ytdlp(video_id)
+            if _dlp_entries:
+                entries = _dlp_entries
+                lang_info = _dlp_lang + " [yt-dlp fallback]"
+            else:
+                return _ok(f"IP заблокирован YouTube, yt-dlp fallback также не дал результата для {video_id}. Попробуй позже.")
 
         if not entries:
             return _ok(f"Транскрипт пустой для {video_id}.")
-
-        lang_info = f"{transcript.language_code} ({'авто' if transcript.is_generated else 'ручные'})"
 
         # Save to cache
         try:
