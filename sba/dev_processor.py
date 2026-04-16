@@ -150,14 +150,22 @@ Do not modify any other files. Do not restart the bot."""
         else:
             logging.warning(f"Git commit skipped: {commit_result.stderr[:200]}")
 
-        # Save resume context
+        # Save resume context — increment retry_count from existing file to prevent infinite loops
         if resume_message:
+            existing_retry = 0
+            if RESUME_FILE.exists():
+                try:
+                    existing_retry = json.loads(RESUME_FILE.read_text(encoding="utf-8")).get("retry_count", 0)
+                except Exception:
+                    pass
+            new_retry = existing_retry + 1
             RESUME_FILE.write_text(json.dumps({
                 "chat_id": chat_id,
                 "message": resume_message,
-                "retry_count": 1,
+                "retry_count": new_retry,
                 "ts": time.time(),
             }, ensure_ascii=False), encoding="utf-8")
+            logging.info(f"Resume saved with retry_count={new_retry}")
         # Install updated package into production venv
         subprocess.run(
             [str(Path.home() / ".sba" / "venv" / "bin" / "pip"), "install", str(PROJECT_DIR), "--no-deps", "-q"],
