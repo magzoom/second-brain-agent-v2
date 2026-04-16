@@ -52,6 +52,33 @@ def setup(config: dict) -> None:
         os.environ["PATH"] = homebrew + ":" + os.environ.get("PATH", "")
 
 
+_RESUME_FILE = Path.home() / ".sba" / "bot_resume.json"
+
+
+def _save_resume(chat_id: int, message_text: str) -> None:
+    """Save pending resume context before bot restart."""
+    import json, time
+    _RESUME_FILE.write_text(json.dumps({
+        "chat_id": chat_id,
+        "message": message_text,
+        "ts": time.time(),
+    }), encoding="utf-8")
+
+
+def _load_resume() -> dict | None:
+    """Load and delete resume context on startup."""
+    import json
+    if not _RESUME_FILE.exists():
+        return None
+    try:
+        data = json.loads(_RESUME_FILE.read_text(encoding="utf-8"))
+        _RESUME_FILE.unlink()
+        return data
+    except Exception:
+        _RESUME_FILE.unlink(missing_ok=True)
+        return None
+
+
 def _is_owner(message: Message) -> bool:
     return message.chat.id == _owner_chat_id
 
@@ -981,6 +1008,19 @@ async def callback_ext_ok(callback: CallbackQuery) -> None:
     action = ext.get("action")
     title = ext.get("title", action)
 
+    # Grab last user message from chat history for resume after restart
+    chat_id = callback.message.chat.id
+    history = _chat_history.get(chat_id, [])
+    last_user_msg = next(
+        (t for r, t in reversed(list(history)) if r == "user"), None
+    )
+
+    def _restart(save_resume: bool = True) -> None:
+        import subprocess as sp, os
+        if save_resume and last_user_msg:
+            _save_resume(chat_id, last_user_msg)
+        sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
+
     try:
         if action == "pip_install":
             package = ext.get("package", "").strip()
@@ -998,11 +1038,9 @@ async def callback_ext_ok(callback: CallbackQuery) -> None:
                 await callback.message.edit_text(f"❌ Ошибка установки {package}:\n{result.stderr[:300]}")
                 return
             await callback.message.edit_text(
-                f"✅ <b>{package}</b> установлен.\n\nПерезапускаю бота для применения изменений..."
+                f"✅ <b>{package}</b> установлен.\n\nПерезапускаю бота, продолжу выполнение запроса..."
             )
-            import subprocess as sp
-            import os
-            sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
+            _restart()
 
         elif action == "add_config_value":
             config_path = ext.get("config_path", "").strip()
@@ -1015,7 +1053,6 @@ async def callback_ext_ok(callback: CallbackQuery) -> None:
             cfg_file = _Path.home() / ".sba" / "config.yaml"
             with open(cfg_file) as f:
                 cfg = yaml.safe_load(f) or {}
-            # Set nested key via dot notation
             keys = config_path.split(".")
             node = cfg
             for k in keys[:-1]:
@@ -1024,15 +1061,13 @@ async def callback_ext_ok(callback: CallbackQuery) -> None:
             with open(cfg_file, "w") as f:
                 yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
             await callback.message.edit_text(
-                f"✅ Конфиг обновлён: <code>{config_path}</code>\n\nПерезапускаю бота..."
+                f"✅ Конфиг обновлён: <code>{config_path}</code>\n\nПерезапускаю бота, продолжу выполнение запроса..."
             )
-            import subprocess as sp, os
-            sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
+            _restart()
 
         elif action == "restart_bot":
             await callback.message.edit_text("🔄 Перезапускаю бота...")
-            import subprocess as sp, os
-            sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
+            _restart(save_resume=False)
 
         else:
             await callback.message.edit_text(f"❌ Неизвестное действие: {action}")
