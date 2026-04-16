@@ -92,6 +92,24 @@ cd ~/Desktop/second-brain-agent-v2
 - SDK запускает Claude Code CLI как subprocess → нельзя вложенно из Claude Code сессии
 - Module-level globals `_db`, `_notifier`, `_config` — injected via `setup()`
 
+## Правила для CC при автоматической разработке инструментов
+
+Когда dev_processor.py запускает CC для добавления нового инструмента в `sba/agent.py`, код должен соответствовать prod-окружению (launchd), а не интерактивной сессии разработчика:
+
+**PATH в launchd ограничен** — только `/usr/bin:/bin:/usr/sbin:/sbin`. Нет homebrew, нет venv bin, нет ~/.local/bin.
+- Никогда не вызывай CLI-утилиты по короткому имени (`yt-dlp`, `ffmpeg`, `node`...)
+- Всегда используй полный путь: `str(Path.home() / ".sba" / "venv" / "bin" / "yt-dlp")`
+- Добавляй `os.path.exists(full_path)` проверку + fallback на короткое имя
+
+**Версии библиотек** — всегда проверяй актуальный API установленной версии:
+- `~/.sba/venv/bin/pip show <package>` — версия
+- `~/.sba/venv/bin/python -c "import pkg; help(pkg.SomeClass.some_method)"` — сигнатура
+- Не полагайся на API из памяти — библиотеки меняют интерфейс между версиями
+
+**Импорты** — все внутри тела функции (lazy), не на уровне модуля
+
+**Валидация** — обязательно запустить `~/.sba/venv/bin/python -c "from sba import agent"` после изменений
+
 ## Самодостраивание (agent.py)
 
 - Инструмент `propose_capability_extension` — отправляет кнопки в Telegram: `✅ Разрешить / ❌ Отменить`

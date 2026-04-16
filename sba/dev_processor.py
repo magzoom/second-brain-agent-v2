@@ -72,37 +72,69 @@ Read ~/Desktop/second-brain-agent-v2/sba/agent.py to understand the @tool patter
 
 Task: {task}
 
-Add the tool to sba/agent.py:
+IMPORTANT — before writing any code, investigate first:
+1. Search locally for existing solutions:
+   - `find ~ -type f -iname "*<keyword>*" 2>/dev/null | grep -v ".cache\|node_modules\|.git"` — find related tools/scripts
+   - `find ~ -type d -iname "*mcp*" 2>/dev/null | grep -v ".cache\|node_modules"` — find MCP servers
+   - `ls ~/.local/bin/ /opt/homebrew/bin/` — find installed CLI tools
+   - `~/.sba/venv/bin/pip list | grep <keyword>` — find installed Python packages
+2. Check actual API of any library you plan to use:
+   - `~/.sba/venv/bin/pip show <package>` — version
+   - `~/.sba/venv/bin/python -c "import <pkg>; print(dir(<pkg>))"` — actual methods
+3. If tool already exists in agent.py — read it, understand what's wrong, fix in place
+4. Choose the simplest reliable solution — prefer existing local tools over writing new code
+
+Only after investigation, implement the fix:
 1. Backup agent.py to agent.py.bak
-2. Define the async function before the line '_main_server = create_sdk_mcp_server('
-   - All imports must be inside the function body (lazy imports)
+2. If tool already exists — edit it in place. If new — add before '_main_server = create_sdk_mcp_server('
+   - All imports inside the function body (lazy imports)
    - Use _ok() helper for return values
+   - Use full paths for CLI tools: str(Path.home() / ".sba" / "venv" / "bin" / "tool-name")
    - Follow existing @tool decorator pattern exactly
-3. Add function reference to tools=[] list after line '_request_capability_development_tool,'
-4. Add 'mcp__sba__{tool_name}' to allowed_tools list after 'mcp__sba__request_capability_development'
-5. Validate: run `~/.sba/venv/bin/python -c "from sba import agent"` from project directory
-6. If validation PASSES:
-   - Delete agent.py.bak
-   - Write to ~/.sba/dev_request.json: {{"status": "ready", "tool_name": "{tool_name}"}}
-7. If validation FAILS:
-   - Restore agent.py from agent.py.bak, delete agent.py.bak
-   - Write to ~/.sba/dev_request.json: {{"status": "error", "message": "<error>"}}
+3. If new tool: add to tools=[] list after '_request_capability_development_tool,'
+4. If new tool: add 'mcp__sba__{tool_name}' to allowed_tools after 'mcp__sba__request_capability_development'
+5. Validate: `~/.sba/venv/bin/python -c "from sba import agent"`
+6. If PASSES: delete agent.py.bak, write {{"status": "ready", "tool_name": "{tool_name}"}} to ~/.sba/dev_request.json
+7. If FAILS: restore from agent.py.bak, write {{"status": "error", "message": "<error>"}} to ~/.sba/dev_request.json
 
 Do not modify any other files. Do not restart the bot."""
 
+    # Run CC inside a tmux window so output is visible for debugging
+    tmux_session = "sba-dev"
+    log_file = str(LOG_FILE.parent / "sba-dev-cc.log")
+    full_path = f"{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    cc_env = {**os.environ, "HOME": str(Path.home()), "PATH": full_path}
+
+    # Ensure tmux session exists
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-s", tmux_session],
+        capture_output=True, env=cc_env,
+    )
+    # Send a visible header to the tmux window
+    subprocess.run(
+        ["tmux", "send-keys", "-t", tmux_session,
+         f"echo '=== SBA Dev: {tool_name} ===' && date", "Enter"],
+        capture_output=True, env=cc_env,
+    )
+
     try:
-        full_path = f"{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         result = subprocess.run(
             [CLAUDE_BIN, "-p", prompt, "--dangerously-skip-permissions"],
             cwd=str(PROJECT_DIR),
-            capture_output=True,
             text=True,
             timeout=300,
-            env={
-                **os.environ,
-                "HOME": str(Path.home()),
-                "PATH": full_path,
-            },
+            env=cc_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        # Write output to tmux and log file
+        cc_output = result.stdout + result.stderr
+        with open(log_file, "a", encoding="utf-8") as lf:
+            lf.write(f"\n=== {tool_name} ===\n{cc_output}\n")
+        subprocess.run(
+            ["tmux", "send-keys", "-t", tmux_session,
+             f"echo 'CC exit={result.returncode}' && tail -20 {log_file}", "Enter"],
+            capture_output=True, env=cc_env,
         )
         logging.info(f"CC exit={result.returncode} stdout={result.stdout[:300]}")
         if result.stderr:
