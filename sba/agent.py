@@ -790,10 +790,13 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
     video_id = match.group(1)
 
     def _fetch_transcript(vid_id: str):
-        from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+        from youtube_transcript_api import YouTubeTranscriptApi
+        from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
+
+        api = YouTubeTranscriptApi()
 
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(vid_id)
+            transcript_list = api.list(vid_id)
         except TranscriptsDisabled:
             return None, None, "Субтитры недоступны для этого видео"
         except Exception as e:
@@ -802,28 +805,35 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
         # Try manual first, then auto-generated; prefer any language
         transcript = None
         lang = None
-        try:
-            transcript = transcript_list.find_manually_created_transcript(
-                [t.language_code for t in transcript_list._manually_created_transcripts.values()]
-            )
-            lang = transcript.language_code
-        except Exception:
-            pass
 
-        if transcript is None:
+        manual_codes = [t.language_code for t in transcript_list._manually_created_transcripts.values()]
+        if manual_codes:
             try:
-                transcript = transcript_list.find_generated_transcript(
-                    [t.language_code for t in transcript_list._generated_transcripts.values()]
-                )
+                transcript = transcript_list.find_manually_created_transcript(manual_codes)
                 lang = transcript.language_code
             except Exception:
                 pass
 
         if transcript is None:
-            return None, None, "Субтитры недоступны для этого видео"
+            generated_codes = [t.language_code for t in transcript_list._generated_transcripts.values()]
+            if generated_codes:
+                try:
+                    transcript = transcript_list.find_generated_transcript(generated_codes)
+                    lang = transcript.language_code
+                except Exception:
+                    pass
+
+        if transcript is None:
+            # Last resort: take first available from iterator
+            try:
+                transcript = next(iter(transcript_list))
+                lang = transcript.language_code
+            except StopIteration:
+                return None, None, "Субтитры недоступны для этого видео"
 
         try:
-            entries = transcript.fetch()
+            fetched = transcript.fetch()
+            entries = fetched.to_raw_data()
         except Exception as e:
             return None, None, f"Ошибка загрузки транскрипта: {e}"
 
