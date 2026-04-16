@@ -240,7 +240,7 @@ def service() -> None:
 
 
 @service.command("install")
-@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "finance", "fin_remind", "all"]))
+@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "finance", "fin_remind", "dev", "all"]))
 def service_install(daemon: str) -> None:
     """Install launchd plist(s)."""
     config = _load_config()
@@ -252,7 +252,7 @@ def service_install(daemon: str) -> None:
 
 
 @service.command("uninstall")
-@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "finance", "fin_remind", "all"]))
+@click.argument("daemon", type=click.Choice(["bot", "inbox", "legacy", "digest", "finance", "fin_remind", "dev", "all"]))
 def service_uninstall(daemon: str) -> None:
     """Uninstall launchd plist(s)."""
     from sba.service_manager import uninstall_daemon, DAEMONS

@@ -683,48 +683,46 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
         return _ok("\n".join(lines))
 
 
-@tool("propose_tool_addition",
-    "Предложить добавить новый инструмент в агента. Используй когда нужен инструмент которого нет, и ты можешь написать его код.",
+@tool("request_capability_development",
+    "Запросить разработку нового инструмента через Claude Code сессию. Используй когда нужен инструмент которого нет в списке.",
     {
         "type": "object",
         "properties": {
             "tool_name": {"type": "string", "description": "snake_case имя инструмента (например: get_youtube_transcript)"},
-            "tool_fn_name": {"type": "string", "description": "Имя Python функции с префиксом _ и суффиксом _tool (например: _get_youtube_transcript_tool)"},
-            "tool_description": {"type": "string", "description": "Одна строка: что делает инструмент"},
-            "tool_code": {"type": "string", "description": "Полный Python код инструмента с @tool декоратором. Используй паттерн: @tool(name, desc, schema) async def _name_tool(args: dict) -> dict: ... return _ok(result)"},
+            "task": {"type": "string", "description": "Подробное описание что должен делать инструмент, какие входные параметры принимать, что возвращать"},
             "resume_message": {"type": "string", "description": "Исходный запрос пользователя — будет выполнен автоматически после добавления инструмента"},
         },
-        "required": ["tool_name", "tool_fn_name", "tool_description", "tool_code", "resume_message"],
+        "required": ["tool_name", "task", "resume_message"],
     }
 )
-async def _propose_tool_addition_tool(args: dict) -> dict:
-    import json
+async def _request_capability_development_tool(args: dict) -> dict:
+    import json, time
     from pathlib import Path as _Path
 
-    pending_file = _Path.home() / ".sba" / "pending_tool.json"
+    dev_file = _Path.home() / ".sba" / "dev_request.json"
 
-    # Guard: don't send duplicate proposals if one is already pending
-    if pending_file.exists():
-        return _ok("Предложение уже отправлено и ожидает подтверждения пользователя. Не повторяй вызов.")
+    if dev_file.exists():
+        return _ok("Запрос на разработку уже в очереди. Не повторяй вызов.")
 
-    pending_file.write_text(json.dumps(args, ensure_ascii=False, indent=2), encoding="utf-8")
-
+    chat_id = _config.get("owner", {}).get("telegram_chat_id", 0)
     tool_name = args.get("tool_name", "")
-    tool_desc = args.get("tool_description", "")
+    task = args.get("task", "")
+    resume_message = args.get("resume_message", "")
 
-    keyboard = {"inline_keyboard": [[
-        {"text": "✅ Применить", "callback_data": "tool_apply_ok"},
-        {"text": "❌ Отмена", "callback_data": "tool_apply_deny"},
-    ]]}
+    dev_file.write_text(json.dumps({
+        "status": "pending",
+        "tool_name": tool_name,
+        "task": task,
+        "resume_message": resume_message,
+        "chat_id": int(chat_id),
+        "ts": time.time(),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    text = (
-        f"🔧 <b>Новый инструмент: <code>{tool_name}</code></b>\n\n"
-        f"{tool_desc}\n\n"
-        f"Код будет добавлен в <code>sba/agent.py</code>, проверен и применён автоматически."
+    await _notifier.send_message(
+        f"🔧 Нужен инструмент <code>{tool_name}</code>.\n"
+        f"Передаю задачу Claude Code — разработает и установит автоматически."
     )
-
-    await _notifier.send_message(text, reply_markup=keyboard)
-    return _ok(f"Предложение добавить инструмент '{tool_name}' отправлено пользователю. Жду подтверждения.")
+    return _ok(f"Запрос на разработку инструмента '{tool_name}' отправлен. Claude Code займётся этим.")
 
 
 @tool("propose_capability_extension",
@@ -795,7 +793,7 @@ _main_server = create_sdk_mcp_server(
         _finance_manage_recurring_tool,
         _finance_list_recurring_tool,
         _propose_extension_tool,
-        _propose_tool_addition_tool,
+        _request_capability_development_tool,
     ],
 )
 
@@ -834,30 +832,20 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 
 Самодостраивание (ВАЖНО):
 Если задача требует отсутствующего инструмента — НИКОГДА не говори "не могу", "нет доступа", "эта функция недоступна".
-Вместо этого выбери один из двух путей:
+Вместо этого выбери путь:
 
-Путь A — нужно написать новый инструмент (ты умеешь писать его код):
-→ вызови propose_tool_addition с полным Python кодом инструмента.
-Паттерн кода инструмента:
-```
-@tool("tool_name", "описание", {"type":"object","properties":{...},"required":[...]})
-async def _tool_name_tool(args: dict) -> dict:
-    # импорты внутри функции
-    ...
-    return _ok("результат")
-```
-Примеры когда использовать: get_youtube_transcript, parse_pdf, send_email, read_local_file.
+Путь A — нужен новый инструмент (например: get_youtube_transcript, parse_pdf, send_email):
+→ вызови request_capability_development с названием инструмента, подробным описанием задачи и исходным запросом пользователя.
+Claude Code разработает инструмент автоматически и бот перезапустится.
 
 Путь Б — нужна внешняя зависимость (pip-пакет, API-ключ, перезапуск):
 1. Оцени: потребует ли ручной настройки (QR-код, регистрация и т.п.)?
-   - Да → сначала честно опиши что нужно вручную
+   - Да → честно опиши что нужно вручную
 2. Оцени: передаются ли персональные данные наружу?
    - Нет → вызови propose_capability_extension
    - Да → объясни и попроси данные явно
 
-Правило: всегда предпочитай Путь A если можешь написать код сам. Путь Б — только если нужен внешний сервис/ключ/пакет без кода.
-Правило: любое расширение только с явным подтверждением пользователя.
-КРИТИЧНО: после вызова propose_tool_addition или propose_capability_extension — НЕМЕДЛЕННО СТОП. Не вызывай их повторно. Не делай никаких других tool calls. Верни пустой ответ и жди подтверждения пользователя.
+КРИТИЧНО: после вызова request_capability_development или propose_capability_extension — НЕМЕДЛЕННО СТОП. Не повторяй. Жди.
 
 Индексация базы знаний:
 - FTS5 индекс наполняется постепенно: новые файлы индексируются сразу при обработке через inbox.
@@ -976,7 +964,7 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__finance_manage_recurring",
             "mcp__sba__finance_list_recurring",
             "mcp__sba__propose_capability_extension",
-            "mcp__sba__propose_tool_addition",
+            "mcp__sba__request_capability_development",
             "WebSearch",   # прямой веб-поиск
             "WebFetch",    # чтение страниц
             "Task",        # вызов Research Agent (для сложных multi-step запросов)

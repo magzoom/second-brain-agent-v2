@@ -33,6 +33,7 @@ DAEMONS = {
     "digest": "com.sba.digest",
     "finance": "com.sba.finance",
     "fin_remind": "com.sba.fin_remind",
+    "dev": "com.sba.dev",
 }
 
 # v1 used a different label for the bot; unload it when installing v2 bot
@@ -279,6 +280,47 @@ def _fin_remind_plist() -> str:
 </plist>"""
 
 
+def _dev_plist() -> str:
+    log = get_log_path("dev")
+    python = str(SBA_PYTHON)
+    request_file = str(Path.home() / ".sba" / "dev_request.json")
+    project_dir = str(Path.home() / "Desktop" / "second-brain-agent-v2")
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sba.dev</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{python}</string>
+    <string>-m</string>
+    <string>sba.dev_processor</string>
+  </array>
+  <key>WatchPaths</key>
+  <array>
+    <string>{request_file}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{project_dir}</string>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>{log}</string>
+  <key>StandardErrorPath</key>
+  <string>{log}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Applications/cmux.app/Contents/Resources/bin:{SBA_VENV}/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>{Path.home()}</string>
+  </dict>
+</dict>
+</plist>"""
+
+
 _BUILDERS = {
     "bot": _bot_plist,
     "inbox": _inbox_plist,
@@ -286,6 +328,7 @@ _BUILDERS = {
     "digest": _digest_plist,
     "finance": _finance_plist,
     "fin_remind": _fin_remind_plist,
+    "dev": _dev_plist,
 }
 
 
