@@ -12,7 +12,7 @@ from pathlib import Path
 DEV_REQUEST_FILE = Path.home() / ".sba" / "dev_request.json"
 RESUME_FILE = Path.home() / ".sba" / "bot_resume.json"
 PROJECT_DIR = Path.home() / "Desktop" / "second-brain-agent-v2"
-CLAUDE_BIN = "/Applications/cmux.app/Contents/Resources/bin/claude"
+CLAUDE_BIN = str(Path.home() / ".local" / "bin" / "claude")
 LOG_FILE = Path.home() / ".sba" / "logs" / "sba-dev.log"
 
 
@@ -22,9 +22,10 @@ def _notify(chat_id: int, text: str, config: dict) -> None:
         return
     import urllib.request
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    body = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML"}).encode()
+    body = json.dumps({"chat_id": chat_id, "text": text}).encode()
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
     try:
-        urllib.request.urlopen(url, body, timeout=10)
+        urllib.request.urlopen(req, timeout=10)
     except Exception as e:
         logging.warning(f"Telegram notify failed: {e}")
 
@@ -64,7 +65,7 @@ def main():
     data["status"] = "processing"
     DEV_REQUEST_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     logging.info(f"Processing dev request for tool: {tool_name}")
-    _notify(chat_id, f"⚙️ Claude Code разрабатывает <code>{tool_name}</code>...", config)
+    _notify(chat_id, f"⚙️ Claude Code разрабатывает {tool_name}...", config)
 
     prompt = f"""Read ~/Desktop/second-brain-agent-v2/CLAUDE.md for project context.
 Read ~/Desktop/second-brain-agent-v2/sba/agent.py to understand the @tool patterns.
@@ -90,8 +91,9 @@ Add the tool to sba/agent.py:
 Do not modify any other files. Do not restart the bot."""
 
     try:
+        full_path = f"{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
         result = subprocess.run(
-            [CLAUDE_BIN, "-p", prompt, "--dangerouslySkipPermissions"],
+            [CLAUDE_BIN, "-p", prompt, "--dangerously-skip-permissions"],
             cwd=str(PROJECT_DIR),
             capture_output=True,
             text=True,
@@ -99,7 +101,7 @@ Do not modify any other files. Do not restart the bot."""
             env={
                 **os.environ,
                 "HOME": str(Path.home()),
-                "PATH": f"/Applications/cmux.app/Contents/Resources/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+                "PATH": full_path,
             },
         )
         logging.info(f"CC exit={result.returncode} stdout={result.stdout[:300]}")
@@ -145,7 +147,7 @@ Do not modify any other files. Do not restart the bot."""
     elif status == "error":
         msg = updated.get("message", "неизвестная ошибка")
         logging.error(f"CC reported error: {msg}")
-        _notify(chat_id, f"❌ Не удалось создать <code>{tool_name}</code>:\n<code>{msg[:300]}</code>", config)
+        _notify(chat_id, f"❌ Не удалось создать {tool_name}:\n{msg[:300]}", config)
         DEV_REQUEST_FILE.unlink(missing_ok=True)
 
     else:
@@ -158,7 +160,7 @@ def _fail(data: dict, chat_id: int, config: dict, message: str) -> None:
     data["status"] = "error"
     data["message"] = message
     DEV_REQUEST_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    _notify(chat_id, f"❌ Ошибка разработки инструмента:\n<code>{message[:300]}</code>", config)
+    _notify(chat_id, f"❌ Ошибка разработки инструмента:\n{message[:300]}", config)
     DEV_REQUEST_FILE.unlink(missing_ok=True)
 
 
