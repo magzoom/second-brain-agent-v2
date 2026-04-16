@@ -725,20 +725,21 @@ async def _request_capability_development_tool(args: dict) -> dict:
     return _ok(f"Запрос на разработку инструмента '{tool_name}' отправлен. Claude Code займётся этим.")
 
 
-@tool("get_youtube_transcript", "Получить полный транскрипт (субтитры) YouTube видео по ссылке или ID.", {
+@tool("get_youtube_transcript", "Получить транскрипт YouTube видео. Если передан query — возвращает только релевантные фрагменты (для длинных видео). Без query — первые 8000 символов + общий размер.", {
     "type": "object",
     "properties": {
-        "video_url": {"type": "string", "description": "Полная ссылка на YouTube видео (https://youtube.com/watch?v=...) или ID видео"},
+        "video_url": {"type": "string", "description": "Ссылка на YouTube видео или video ID"},
+        "query": {"type": "string", "description": "Ключевые слова/тема для поиска в транскрипте. Используй всегда для длинных видео (>30 мин). Например: 'openclaw development history'"},
     },
     "required": ["video_url"],
 })
 async def _get_youtube_transcript_tool(args: dict[str, Any]) -> dict[str, Any]:
     import re as _re
     video_url = args.get("video_url", "").strip()
+    search_query = args.get("query", "").strip().lower()
 
-    # Extract video ID from URL or use as-is
     patterns = [
-        r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([A-Za-z0-9_-]{11})",
+        r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/|youtube\.com/embed/)([A-Za-z0-9_-]{11})",
         r"^([A-Za-z0-9_-]{11})$",
     ]
     video_id = None
@@ -753,51 +754,73 @@ async def _get_youtube_transcript_tool(args: dict[str, Any]) -> dict[str, Any]:
     try:
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
     except ImportError:
-        return _ok("Библиотека youtube-transcript-api не установлена. Вызови propose_capability_extension для установки пакета youtube-transcript-api.")
+        return _ok("Библиотека youtube-transcript-api не установлена.")
 
     try:
-        transcript_list = await asyncio.to_thread(YouTubeTranscriptApi.list_transcripts, video_id)
+        api = YouTubeTranscriptApi()
+        transcript_list = await asyncio.to_thread(api.list, video_id)
     except TranscriptsDisabled:
         return _ok(f"Субтитры отключены для видео {video_id}.")
     except Exception as e:
-        return _ok(f"Не удалось получить список субтитров для {video_id}: {e}")
+        return _ok(f"Не удалось получить субтитры для {video_id}: {e}")
 
-    # Try auto-generated first, then manual
     transcript = None
-    for try_generated in (True, False):
-        for lang in ("ru", "en", None):
-            try:
-                if lang:
-                    if try_generated:
-                        transcript = transcript_list.find_generated_transcript([lang])
-                    else:
-                        transcript = transcript_list.find_manually_created_transcript([lang])
-                else:
-                    # Any available
-                    all_tr = list(transcript_list)
-                    if all_tr:
-                        transcript = all_tr[0]
-                if transcript:
-                    break
-            except (NoTranscriptFound, Exception):
-                continue
-        if transcript:
+    for lang in ("ru", "en"):
+        try:
+            transcript = transcript_list.find_transcript([lang])
             break
-
-    if not transcript:
-        return _ok(f"Субтитры не найдены для видео {video_id} ни на одном языке.")
+        except NoTranscriptFound:
+            continue
+    if transcript is None:
+        try:
+            transcript = next(iter(transcript_list))
+        except StopIteration:
+            return _ok(f"Субтитры не найдены для {video_id}.")
 
     try:
-        entries = await asyncio.to_thread(transcript.fetch)
+        fetched = await asyncio.to_thread(transcript.fetch)
+        entries = fetched.to_raw_data()
     except Exception as e:
-        return _ok(f"Не удалось загрузить субтитры ({transcript.language}): {e}")
+        return _ok(f"Не удалось загрузить субтитры: {e}")
 
-    text = " ".join(e.get("text", "") for e in entries if e.get("text"))
-    if not text.strip():
-        return _ok(f"Транскрипт пустой для видео {video_id}.")
+    if not entries:
+        return _ok(f"Транскрипт пустой для {video_id}.")
 
-    lang_info = f"{transcript.language} ({'авто' if transcript.is_generated else 'ручные'})"
-    return _ok(f"Транскрипт ({lang_info}):\n\n{text}")
+    lang_info = f"{transcript.language_code} ({'авто' if transcript.is_generated else 'ручные'})"
+    total_chars = sum(len(e.get("text", "")) for e in entries)
+
+    if search_query:
+        # Return chunks containing query keywords (±30 sec window around each hit)
+        keywords = search_query.split()
+        relevant = []
+        seen_indices = set()
+        for i, e in enumerate(entries):
+            text_lower = e.get("text", "").lower()
+            if any(kw in text_lower for kw in keywords):
+                window = range(max(0, i - 3), min(len(entries), i + 8))
+                for j in window:
+                    if j not in seen_indices:
+                        seen_indices.add(j)
+                        relevant.append(entries[j])
+
+        if not relevant:
+            # fallback: return beginning
+            relevant = entries[:80]
+            note = f"[Ключевые слова не найдены в транскрипте. Показаны первые фрагменты. Всего символов: {total_chars}]\n\n"
+        else:
+            note = f"[Найдено {len(relevant)} фрагментов по запросу '{search_query}'. Всего символов в транскрипте: {total_chars}]\n\n"
+
+        def _fmt(e):
+            secs = int(e.get("start", 0))
+            return f"[{secs//60}:{secs%60:02d}] {e.get('text','')}"
+
+        result = note + "\n".join(_fmt(e) for e in relevant)
+        return _ok(result[:12000])
+    else:
+        # No query: return first 8000 chars with size warning
+        full_text = " ".join(e.get("text", "") for e in entries if e.get("text"))
+        note = f"[Транскрипт {lang_info}, {total_chars} символов. Показаны первые 8000. Используй параметр query для поиска по теме.]\n\n"
+        return _ok(note + full_text[:8000])
 
 
 @tool("propose_capability_extension",
