@@ -38,14 +38,17 @@ async def _send_resume(bot: Bot, resume: dict, config: dict) -> None:
     # Re-write resume file so dev_processor can read retry_count if agent triggers CC.
     # _load_resume() already deleted it — restore it for the duration of this run.
     _RESUME_FILE.write_text(_json.dumps(resume, ensure_ascii=False), encoding="utf-8")
+    _DEV_REQUEST_FILE = _Path.home() / ".sba" / "dev_request.json"
     try:
         status = await bot.send_message(chat_id, f"↩️ Продолжаю выполнение (попытка {retry_count}):\n<i>{text[:200]}</i>")
         await _run_agent(status, text, status, timeout=300)
-        # Agent completed without triggering CC — clean up resume
-        _RESUME_FILE.unlink(missing_ok=True)
     except Exception as e:
         logger.error(f"Resume failed: {e}", exc_info=True)
-        _RESUME_FILE.unlink(missing_ok=True)
+    finally:
+        # Only delete resume if agent did NOT trigger CC (dev_request.json absent).
+        # If CC was triggered, dev_processor needs resume to increment retry_count.
+        if not _DEV_REQUEST_FILE.exists():
+            _RESUME_FILE.unlink(missing_ok=True)
 
 
 async def run_bot(config: dict) -> None:
