@@ -158,7 +158,7 @@ async def cmd_log(message: Message) -> None:
 
 # ── Shared agent runner ───────────────────────────────────────────────────────
 
-async def _run_agent(message: Message, text: str, status_msg, timeout: int = 180) -> None:
+async def _run_agent(message: Message, text: str, status_msg, timeout: int = 300) -> None:
     """Common logic for calling Main Agent. Used by text and voice handlers."""
     chat_id = message.chat.id
     if chat_id not in _chat_history:
@@ -192,7 +192,7 @@ async def _run_agent(message: Message, text: str, status_msg, timeout: int = 180
         history.append(("assistant", result[:200]))
 
     except asyncio.TimeoutError:
-        await status_msg.edit_text("Запрос занял слишком много времени. Попробуй упростить.")
+        await status_msg.edit_text("⏳ Запрос занял больше 5 минут — агент ещё работает в фоне или задача слишком сложная. Попробуй ещё раз.")
     except Exception as e:
         logger.error(f"Agent error: {e}", exc_info=True)
         await status_msg.edit_text("Что-то пошло не так. Попробуй ещё раз или проверь /log")
