@@ -792,25 +792,87 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
         return _ok("Не удалось извлечь ID видео из URL. Передай полную ссылку на YouTube.")
     video_id = m.group(1)
 
-    # Method 1: youtube-transcript-api
+    # Method 1: youtube-transcript-api with multiple fallbacks
     try:
         from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
-        import asyncio
 
         def _fetch_transcript():
             ytt = YouTubeTranscriptApi()
+
+            # Attempt A: list all transcripts, try manual then auto-generated, any language
+            try:
+                list_fn = getattr(ytt, "list_transcripts", None) or YouTubeTranscriptApi.list_transcripts
+                transcript_list = list_fn(video_id) if list_fn is YouTubeTranscriptApi.list_transcripts else ytt.list_transcripts(video_id)
+
+                candidates = []
+                for t in transcript_list:
+                    candidates.append(t)
+
+                preferred_langs = ([language] if language else []) + ["ru", "en", "en-US", "en-GB"]
+
+                # Manual transcripts first, preferred language
+                for lang in preferred_langs:
+                    try:
+                        t = transcript_list.find_manually_created_transcript([lang])
+                        fetched = t.fetch()
+                        return fetched
+                    except Exception:
+                        continue
+
+                # Auto-generated transcripts, preferred language
+                for lang in preferred_langs:
+                    try:
+                        t = transcript_list.find_generated_transcript([lang])
+                        fetched = t.fetch()
+                        return fetched
+                    except Exception:
+                        continue
+
+                # Any available transcript regardless of language
+                for t in candidates:
+                    try:
+                        return t.fetch()
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+            # Attempt B: direct fetch with skip_html_cleaning (newer API versions)
+            try:
+                langs = ([language] + ["ru", "en"]) if language else ["ru", "en", "en-US", "en-GB"]
+                return ytt.fetch(video_id, languages=langs, skip_html_cleaning=True)
+            except TypeError:
+                pass  # parameter not supported
+            except Exception:
+                pass
+
+            # Attempt C: direct fetch without extra params (original behavior)
             if language:
-                transcript = ytt.fetch(video_id, languages=[language, "ru", "en"])
+                return ytt.fetch(video_id, languages=[language, "ru", "en"])
             else:
-                transcript = ytt.fetch(video_id)
-            return transcript
+                return ytt.fetch(video_id)
 
         try:
             transcript = await asyncio.to_thread(_fetch_transcript)
+            # Handle both FetchedTranscript objects and plain dicts
+            def _entry_text(s):
+                if hasattr(s, "text"):
+                    return s.text
+                if isinstance(s, dict):
+                    return s.get("text", "")
+                return str(s)
+
+            def _entry_start(s):
+                if hasattr(s, "start"):
+                    return int(s.start)
+                if isinstance(s, dict):
+                    return int(s.get("start", 0))
+                return 0
+
             if include_timestamps:
-                lines = [f"[{int(s.start)}s] {s.text}" for s in transcript]
+                lines = [f"[{_entry_start(s)}s] {_entry_text(s)}" for s in transcript]
             else:
-                lines = [s.text for s in transcript]
+                lines = [_entry_text(s) for s in transcript]
             full_text = "\n".join(lines)
             return _ok(f"Транскрипт видео {video_id}:\n\n{full_text}")
         except (NoTranscriptFound, TranscriptsDisabled):
