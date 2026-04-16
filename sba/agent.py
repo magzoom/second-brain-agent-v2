@@ -735,6 +735,8 @@ async def _request_capability_development_tool(args: dict) -> dict:
 })
 async def _get_youtube_transcript_tool(args: dict[str, Any]) -> dict[str, Any]:
     import re as _re
+    import json as _json
+    import time as _time
     video_url = args.get("video_url", "").strip()
     search_query = args.get("query", "").strip().lower()
 
@@ -751,75 +753,101 @@ async def _get_youtube_transcript_tool(args: dict[str, Any]) -> dict[str, Any]:
     if not video_id:
         return _ok(f"Не удалось извлечь ID видео из: {video_url}")
 
-    try:
-        from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
-    except ImportError:
-        return _ok("Библиотека youtube-transcript-api не установлена.")
+    # Cache: ~/.sba/cache/youtube_{video_id}.json
+    cache_dir = Path.home() / ".sba" / "cache"
+    cache_file = cache_dir / f"youtube_{video_id}.json"
+    entries = None
+    lang_info = ""
+    from_cache = False
 
-    try:
-        api = YouTubeTranscriptApi()
-        transcript_list = await asyncio.to_thread(api.list, video_id)
-    except TranscriptsDisabled:
-        return _ok(f"Субтитры отключены для видео {video_id}.")
-    except Exception as e:
-        return _ok(f"Не удалось получить субтитры для {video_id}: {e}")
-
-    transcript = None
-    for lang in ("ru", "en"):
+    if cache_file.exists():
         try:
-            transcript = transcript_list.find_transcript([lang])
-            break
-        except NoTranscriptFound:
-            continue
-    if transcript is None:
+            cached = _json.loads(cache_file.read_text(encoding="utf-8"))
+            entries = cached["entries"]
+            lang_info = cached["lang_info"]
+            from_cache = True
+        except Exception:
+            entries = None
+
+    if entries is None:
         try:
-            transcript = next(iter(transcript_list))
-        except StopIteration:
-            return _ok(f"Субтитры не найдены для {video_id}.")
+            from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+        except ImportError:
+            return _ok("Библиотека youtube-transcript-api не установлена. Вызови propose_capability_extension для установки пакета youtube-transcript-api.")
 
-    try:
-        fetched = await asyncio.to_thread(transcript.fetch)
-        entries = fetched.to_raw_data()
-    except Exception as e:
-        return _ok(f"Не удалось загрузить субтитры: {e}")
+        try:
+            api = YouTubeTranscriptApi()
+            transcript_list = await asyncio.to_thread(api.list, video_id)
+        except TranscriptsDisabled:
+            return _ok(f"Субтитры отключены для видео {video_id}.")
+        except Exception as e:
+            return _ok(f"Не удалось получить субтитры для {video_id}: {e}")
 
-    if not entries:
-        return _ok(f"Транскрипт пустой для {video_id}.")
+        transcript = None
+        for lang in ("ru", "en"):
+            try:
+                transcript = transcript_list.find_transcript([lang])
+                break
+            except NoTranscriptFound:
+                continue
+        if transcript is None:
+            try:
+                transcript = next(iter(transcript_list))
+            except StopIteration:
+                return _ok(f"Субтитры не найдены для {video_id}.")
 
-    lang_info = f"{transcript.language_code} ({'авто' if transcript.is_generated else 'ручные'})"
+        try:
+            fetched = await asyncio.to_thread(transcript.fetch)
+            entries = fetched.to_raw_data()
+        except Exception as e:
+            return _ok(f"Не удалось загрузить субтитры: {e}")
+
+        if not entries:
+            return _ok(f"Транскрипт пустой для {video_id}.")
+
+        lang_info = f"{transcript.language_code} ({'авто' if transcript.is_generated else 'ручные'})"
+
+        # Save to cache
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(_json.dumps({
+                "video_id": video_id,
+                "lang_info": lang_info,
+                "entries": entries,
+                "cached_at": _time.time(),
+            }, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass  # cache failure is non-critical
+
     total_chars = sum(len(e.get("text", "")) for e in entries)
+    cache_note = " [из кэша]" if from_cache else " [загружено и кэшировано]"
 
     if search_query:
-        # Return chunks containing query keywords (±30 sec window around each hit)
         keywords = search_query.split()
+        seen_indices: set = set()
         relevant = []
-        seen_indices = set()
         for i, e in enumerate(entries):
             text_lower = e.get("text", "").lower()
             if any(kw in text_lower for kw in keywords):
-                window = range(max(0, i - 3), min(len(entries), i + 8))
-                for j in window:
+                for j in range(max(0, i - 3), min(len(entries), i + 8)):
                     if j not in seen_indices:
                         seen_indices.add(j)
                         relevant.append(entries[j])
 
         if not relevant:
-            # fallback: return beginning
             relevant = entries[:80]
-            note = f"[Ключевые слова не найдены в транскрипте. Показаны первые фрагменты. Всего символов: {total_chars}]\n\n"
+            note = f"[Ключевые слова не найдены. Первые фрагменты. {total_chars} симв.{cache_note}]\n\n"
         else:
-            note = f"[Найдено {len(relevant)} фрагментов по запросу '{search_query}'. Всего символов в транскрипте: {total_chars}]\n\n"
+            note = f"[{len(relevant)} фрагментов по запросу '{search_query}'. Всего {total_chars} симв.{cache_note}]\n\n"
 
-        def _fmt(e):
+        def _fmt(e: dict) -> str:
             secs = int(e.get("start", 0))
             return f"[{secs//60}:{secs%60:02d}] {e.get('text','')}"
 
-        result = note + "\n".join(_fmt(e) for e in relevant)
-        return _ok(result[:12000])
+        return _ok((note + "\n".join(_fmt(e) for e in relevant))[:12000])
     else:
-        # No query: return first 8000 chars with size warning
         full_text = " ".join(e.get("text", "") for e in entries if e.get("text"))
-        note = f"[Транскрипт {lang_info}, {total_chars} символов. Показаны первые 8000. Используй параметр query для поиска по теме.]\n\n"
+        note = f"[Транскрипт {lang_info}, {total_chars} симв.{cache_note}. Показаны первые 8000. Используй query для поиска.]\n\n"
         return _ok(note + full_text[:8000])
 
 
