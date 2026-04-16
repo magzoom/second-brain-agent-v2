@@ -766,6 +766,123 @@ async def _propose_extension_tool(args: dict[str, Any]) -> dict[str, Any]:
         await _notifier.send_message(text, reply_markup=keyboard)
     return _ok(f"Предложение #{ext_id} отправлено. Жду подтверждения.")
 
+@tool("get_youtube_transcript",
+    "Получить транскрипт (субтитры) YouTube видео по URL. Возвращает полный текст с временными метками.",
+    {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Ссылка на YouTube видео (youtu.be/... или youtube.com/watch?v=...)"},
+            "language": {"type": "string", "description": "Код языка субтитров, например 'ru' или 'en'. По умолчанию — автовыбор.", "default": ""},
+            "include_timestamps": {"type": "boolean", "description": "Включать ли временные метки в вывод. По умолчанию False.", "default": False},
+        },
+        "required": ["url"],
+    }
+)
+async def _get_youtube_transcript_tool(args: dict) -> dict:
+    import re
+    import asyncio
+
+    url = args.get("url", "").strip()
+    language = args.get("language", "")
+    include_timestamps = args.get("include_timestamps", False)
+
+    # Extract video ID
+    m = re.search(r"(?:v=|youtu\.be/|shorts/)([A-Za-z0-9_-]{11})", url)
+    if not m:
+        return _ok("Не удалось извлечь ID видео из URL. Передай полную ссылку на YouTube.")
+    video_id = m.group(1)
+
+    # Method 1: youtube-transcript-api
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+        import asyncio
+
+        def _fetch_transcript():
+            ytt = YouTubeTranscriptApi()
+            if language:
+                transcript = ytt.fetch(video_id, languages=[language, "ru", "en"])
+            else:
+                transcript = ytt.fetch(video_id)
+            return transcript
+
+        try:
+            transcript = await asyncio.to_thread(_fetch_transcript)
+            if include_timestamps:
+                lines = [f"[{int(s.start)}s] {s.text}" for s in transcript]
+            else:
+                lines = [s.text for s in transcript]
+            full_text = "\n".join(lines)
+            return _ok(f"Транскрипт видео {video_id}:\n\n{full_text}")
+        except (NoTranscriptFound, TranscriptsDisabled):
+            pass  # fall through to yt-dlp
+        except Exception:
+            pass  # fall through to yt-dlp
+
+    except ImportError:
+        pass  # youtube-transcript-api not installed, try yt-dlp
+
+    # Method 2: yt-dlp
+    try:
+        import subprocess
+        import tempfile
+        import os
+        import glob as _glob
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lang_args = ["--sub-lang", language] if language else ["--sub-lang", "ru,en"]
+            cmd = [
+                "yt-dlp",
+                "--write-subs",
+                "--write-auto-subs",
+                "--skip-download",
+                "--sub-format", "vtt",
+                "--output", os.path.join(tmpdir, "%(id)s"),
+            ] + lang_args + [url]
+
+            proc = await asyncio.to_thread(
+                lambda: subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            )
+
+            vtt_files = _glob.glob(os.path.join(tmpdir, "*.vtt"))
+            if not vtt_files:
+                return _ok("Субтитры недоступны для этого видео. yt-dlp не нашёл субтитров.")
+
+            vtt_path = vtt_files[0]
+            with open(vtt_path, "r", encoding="utf-8") as f:
+                raw = f.read()
+
+            # Parse VTT
+            cue_lines = []
+            seen = set()
+            in_cue = False
+            timestamp_re = re.compile(r"^\d{2}:\d{2}:\d{2}")
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line or line.startswith("WEBVTT") or line.startswith("NOTE") or line.startswith("Kind:") or line.startswith("Language:"):
+                    in_cue = False
+                    continue
+                if timestamp_re.match(line):
+                    in_cue = True
+                    ts_part = line.split("-->")[0].strip() if include_timestamps else None
+                    continue
+                if in_cue and line:
+                    clean = re.sub(r"<[^>]+>", "", line).strip()
+                    if clean and clean not in seen:
+                        seen.add(clean)
+                        cue_lines.append(clean)
+
+            if not cue_lines:
+                return _ok("Субтитры скачаны, но текст не удалось извлечь.")
+
+            full_text = "\n".join(cue_lines)
+            return _ok(f"Транскрипт видео {video_id} (через yt-dlp):\n\n{full_text}")
+
+    except FileNotFoundError:
+        return _ok("yt-dlp не установлен. Установи через: pip install yt-dlp")
+    except Exception as e:
+        return _ok(f"Ошибка получения транскрипта: {e}")
+
+
 # ── MCP servers ───────────────────────────────────────────────────────────────
 
 _main_server = create_sdk_mcp_server(
@@ -793,6 +910,7 @@ _main_server = create_sdk_mcp_server(
         _finance_list_recurring_tool,
         _propose_extension_tool,
         _request_capability_development_tool,
+        _get_youtube_transcript_tool,
     ],
 )
 
@@ -970,6 +1088,7 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__finance_list_recurring",
             "mcp__sba__propose_capability_extension",
             "mcp__sba__request_capability_development",
+            "mcp__sba__get_youtube_transcript",
             "WebSearch",   # прямой веб-поиск
             "WebFetch",    # чтение страниц
             "Task",        # вызов Research Agent (для сложных multi-step запросов)
