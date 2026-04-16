@@ -964,6 +964,98 @@ async def callback_confirm_del(callback: CallbackQuery) -> None:
         logger.warning(f"callback_confirm_del edit_text failed: {e}")
 
 
+@router.callback_query(F.data.startswith("ext_ok:"))
+async def callback_ext_ok(callback: CallbackQuery) -> None:
+    """Execute an approved capability extension."""
+    if not _is_owner_callback(callback):
+        return
+    await callback.answer()
+    ext_id = int(callback.data.split(":")[1])
+
+    from sba import extension_registry as _ext_registry
+    ext = _ext_registry.get(ext_id)
+    if not ext:
+        await callback.message.edit_text("⚠️ Запрос устарел или уже выполнен.")
+        return
+
+    action = ext.get("action")
+    title = ext.get("title", action)
+
+    try:
+        if action == "pip_install":
+            package = ext.get("package", "").strip()
+            import re
+            if not package or not re.match(r'^[a-zA-Z0-9._\-\[\]]+$', package):
+                await callback.message.edit_text("❌ Недопустимое имя пакета.")
+                return
+            await callback.message.edit_text(f"⏳ Устанавливаю {package}...")
+            import subprocess, sys
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", package, "-q"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode != 0:
+                await callback.message.edit_text(f"❌ Ошибка установки {package}:\n{result.stderr[:300]}")
+                return
+            await callback.message.edit_text(
+                f"✅ <b>{package}</b> установлен.\n\nПерезапускаю бота для применения изменений..."
+            )
+            import subprocess as sp
+            import os
+            sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
+
+        elif action == "add_config_value":
+            config_path = ext.get("config_path", "").strip()
+            config_value = ext.get("config_value", "").strip()
+            if not config_path or not config_value:
+                await callback.message.edit_text("❌ Не указан путь или значение конфига.")
+                return
+            import yaml
+            from pathlib import Path as _Path
+            cfg_file = _Path.home() / ".sba" / "config.yaml"
+            with open(cfg_file) as f:
+                cfg = yaml.safe_load(f) or {}
+            # Set nested key via dot notation
+            keys = config_path.split(".")
+            node = cfg
+            for k in keys[:-1]:
+                node = node.setdefault(k, {})
+            node[keys[-1]] = config_value
+            with open(cfg_file, "w") as f:
+                yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False)
+            await callback.message.edit_text(
+                f"✅ Конфиг обновлён: <code>{config_path}</code>\n\nПерезапускаю бота..."
+            )
+            import subprocess as sp, os
+            sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
+
+        elif action == "restart_bot":
+            await callback.message.edit_text("🔄 Перезапускаю бота...")
+            import subprocess as sp, os
+            sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
+
+        else:
+            await callback.message.edit_text(f"❌ Неизвестное действие: {action}")
+
+    except Exception as e:
+        logger.error(f"Extension execution failed: {e}", exc_info=True)
+        await callback.message.edit_text(f"❌ Ошибка выполнения: {e}")
+
+
+@router.callback_query(F.data.startswith("ext_deny:"))
+async def callback_ext_deny(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    await callback.answer()
+    ext_id = int(callback.data.split(":")[1])
+    from sba import extension_registry as _ext_registry
+    _ext_registry.get(ext_id)  # clear from registry
+    try:
+        await callback.message.edit_text("❌ Расширение отменено.")
+    except Exception:
+        pass
+
+
 @router.callback_query(F.data.startswith("cancel_del:"))
 async def callback_cancel_del(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):

@@ -23,6 +23,7 @@ from sba.integrations import apple_notes, google_tasks, google_calendar
 from sba import research_agent as _research_module
 from sba import finance as _finance_module
 from sba.security import scan_content
+from sba import extension_registry as _ext_registry
 
 logger = logging.getLogger(__name__)
 
@@ -682,6 +683,48 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
         return _ok("\n".join(lines))
 
 
+@tool("propose_capability_extension",
+    "Предложить расширение возможностей бота. Используй когда нужна недостающая библиотека, API-ключ или перезапуск.",
+    {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Краткое название (например: 'Установить веб-поиск')"},
+            "description": {"type": "string", "description": "Что это даст и зачем нужно"},
+            "action": {"type": "string", "enum": ["pip_install", "add_config_value", "restart_bot"],
+                       "description": "pip_install — установить пакет; add_config_value — добавить ключ в config; restart_bot — перезапустить бота"},
+            "package": {"type": "string", "description": "Имя pip-пакета (только для pip_install)"},
+            "config_path": {"type": "string", "description": "Путь в config.yaml через точку, например finance.brave_api_key"},
+            "involves_personal_data": {"type": "boolean",
+                                       "description": "True если действие передаёт персональные данные на внешний сервис"},
+        },
+        "required": ["title", "description", "action"],
+    }
+)
+async def _propose_extension_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Register a pending extension and send approval request to user."""
+    involves_data = args.get("involves_personal_data", False)
+    ext_id = _ext_registry.register(args)
+
+    data_note = "\n⚠️ <b>Затрагивает персональные данные.</b>" if involves_data else ""
+    action_detail = ""
+    if args.get("package"):
+        action_detail = f"\nПакет: <code>{args['package']}</code>"
+    elif args.get("config_path"):
+        action_detail = f"\nКлюч конфига: <code>{args['config_path']}</code>"
+
+    text = (
+        f"🔧 <b>{args['title']}</b>\n\n"
+        f"{args['description']}{data_note}{action_detail}"
+    )
+    keyboard = {"inline_keyboard": [[
+        {"text": "✅ Разрешить", "callback_data": f"ext_ok:{ext_id}"},
+        {"text": "❌ Отменить", "callback_data": f"ext_deny:{ext_id}"},
+    ]]}
+    if _notifier:
+        await _notifier.send_message(text, reply_markup=keyboard)
+    return _ok(f"Предложение #{ext_id} отправлено. Жду подтверждения.")
+
+
 # ── MCP servers ───────────────────────────────────────────────────────────────
 
 _main_server = create_sdk_mcp_server(
@@ -707,6 +750,7 @@ _main_server = create_sdk_mcp_server(
         _finance_get_transactions_tool,
         _finance_manage_recurring_tool,
         _finance_list_recurring_tool,
+        _propose_extension_tool,
     ],
 )
 
@@ -731,11 +775,21 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 При вопросе пользователя:
 - "что на сегодня" → get_reminders_today
 - "что на неделе" → get_reminders_upcoming
-- "найди про X" → search_knowledge, если нет — вызови Research Agent через Task tool
-- "изучи тему Y" → вызови Research Agent через Task tool
+- "найди про X", "поищи X", "сколько стоит X", "где купить X", "что такое X" → сначала search_knowledge; если нет — WebSearch напрямую
+- "изучи тему Y" подробно → WebSearch + WebFetch для нескольких источников
 
 Если задач на сегодня нет — ответь: "На сегодня задач нет. Свободный день!"
-Если поиск ничего не нашёл — честно скажи и предложи Research Agent.
+ВАЖНО: При запросах поиска ВСЕГДА пробуй WebSearch. Никогда не говори "нет доступа к поиску" без попытки.
+
+Самодостраивание (ВАЖНО):
+Если задача требует отсутствующего инструмента или библиотеки — НИКОГДА не говори "не могу", "нет доступа", "эта функция недоступна".
+Вместо этого:
+1. Определи что именно нужно (pip-пакет, API-ключ, перезапуск)
+2. Оцени: передаются ли персональные данные на внешний сервис?
+   - Нет → вызови propose_capability_extension (пользователь подтвердит кнопкой)
+   - Да → объясни что нужно и попроси пользователя предоставить данные явно
+3. После одобрения пользователя действие выполнится автоматически
+Правило: любое расширение только с явным подтверждением пользователя.
 
 Индексация базы знаний:
 - FTS5 индекс наполняется постепенно: новые файлы индексируются сразу при обработке через inbox.
@@ -853,7 +907,10 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__finance_get_transactions",
             "mcp__sba__finance_manage_recurring",
             "mcp__sba__finance_list_recurring",
-            "Task",  # для вызова Research Agent
+            "mcp__sba__propose_capability_extension",
+            "WebSearch",   # прямой веб-поиск
+            "WebFetch",    # чтение страниц
+            "Task",        # вызов Research Agent (для сложных multi-step запросов)
         ],
         disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep"],
         max_turns=15,
