@@ -766,67 +766,6 @@ async def _propose_extension_tool(args: dict[str, Any]) -> dict[str, Any]:
         await _notifier.send_message(text, reply_markup=keyboard)
     return _ok(f"Предложение #{ext_id} отправлено. Жду подтверждения.")
 
-
-@tool("get_youtube_transcript", "Получить транскрипт/субтитры YouTube-видео по ссылке. Предпочитает русский язык, fallback — английский.", {
-    "type": "object",
-    "properties": {
-        "url": {"type": "string", "description": "Ссылка на YouTube-видео (любой формат: youtube.com/watch?v=..., youtu.be/..., shorts/...)"},
-    },
-    "required": ["url"],
-})
-async def _get_youtube_transcript_tool(args: dict[str, Any]) -> dict[str, Any]:
-    import re
-    from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
-
-    url = args.get("url", "").strip()
-
-    # Extract video ID from various YouTube URL formats
-    patterns = [
-        r"(?:v=|youtu\.be/|embed/|shorts/)([A-Za-z0-9_-]{11})",
-    ]
-    video_id = None
-    for pat in patterns:
-        m = re.search(pat, url)
-        if m:
-            video_id = m.group(1)
-            break
-
-    if not video_id:
-        return _ok(f"Не удалось извлечь video ID из URL: {url}")
-
-    try:
-        api = YouTubeTranscriptApi()
-        transcript_list = await asyncio.to_thread(api.list, video_id)
-
-        transcript = None
-        # Prefer Russian, then English, then any
-        for lang in ("ru", "en"):
-            try:
-                transcript = transcript_list.find_transcript([lang])
-                break
-            except NoTranscriptFound:
-                continue
-
-        if transcript is None:
-            # Try any generated transcript
-            try:
-                transcript = transcript_list.find_generated_transcript(["ru", "en"])
-            except NoTranscriptFound:
-                # Take first available
-                transcript = next(iter(transcript_list))
-
-        fetched = await asyncio.to_thread(transcript.fetch)
-        entries = fetched.to_raw_data()
-        text = " ".join(e.get("text", "") for e in entries if e.get("text", "").strip())
-        lang_used = transcript.language_code
-        return _ok(f"Транскрипт видео {video_id} [{lang_used}]:\n\n{text}")
-
-    except TranscriptsDisabled:
-        return _ok(f"Субтитры отключены для видео {video_id}.")
-    except Exception as e:
-        return _ok(f"Ошибка получения транскрипта {video_id}: {e}")
-
-
 # ── MCP servers ───────────────────────────────────────────────────────────────
 
 _main_server = create_sdk_mcp_server(
@@ -854,7 +793,6 @@ _main_server = create_sdk_mcp_server(
         _finance_list_recurring_tool,
         _propose_extension_tool,
         _request_capability_development_tool,
-        _get_youtube_transcript_tool,
     ],
 )
 
@@ -1032,7 +970,6 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__finance_list_recurring",
             "mcp__sba__propose_capability_extension",
             "mcp__sba__request_capability_development",
-            "mcp__sba__get_youtube_transcript",
             "WebSearch",   # прямой веб-поиск
             "WebFetch",    # чтение страниц
             "Task",        # вызов Research Agent (для сложных multi-step запросов)
