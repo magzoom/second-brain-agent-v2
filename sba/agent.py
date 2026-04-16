@@ -702,6 +702,11 @@ async def _propose_tool_addition_tool(args: dict) -> dict:
     from pathlib import Path as _Path
 
     pending_file = _Path.home() / ".sba" / "pending_tool.json"
+
+    # Guard: don't send duplicate proposals if one is already pending
+    if pending_file.exists():
+        return _ok("Предложение уже отправлено и ожидает подтверждения пользователя. Не повторяй вызов.")
+
     pending_file.write_text(json.dumps(args, ensure_ascii=False, indent=2), encoding="utf-8")
 
     tool_name = args.get("tool_name", "")
@@ -852,6 +857,7 @@ async def _tool_name_tool(args: dict) -> dict:
 
 Правило: всегда предпочитай Путь A если можешь написать код сам. Путь Б — только если нужен внешний сервис/ключ/пакет без кода.
 Правило: любое расширение только с явным подтверждением пользователя.
+КРИТИЧНО: после вызова propose_tool_addition или propose_capability_extension — НЕМЕДЛЕННО СТОП. Не вызывай их повторно. Не делай никаких других tool calls. Верни пустой ответ и жди подтверждения пользователя.
 
 Индексация базы знаний:
 - FTS5 индекс наполняется постепенно: новые файлы индексируются сразу при обработке через inbox.
