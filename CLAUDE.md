@@ -31,9 +31,11 @@ sba/
   service_manager.py — launchd plist builder/manager
   db.py             — SQLite + FTS5 (shared ~/.sba/sba.db)
   notifier.py       — Telegram send helpers
+  extension_registry.py — shared pending extension actions (agent → handlers)
+  security.py       — FTS5 input scanner (prompt injection, exfil, invisible chars)
   bot/
     bot.py          — aiogram 3.x setup
-    handlers.py     — conversational handlers + folder_deep/folder_summary callbacks
+    handlers.py     — conversational handlers + folder_deep/folder_summary callbacks + ext_ok/ext_deny callbacks
     keyboards.py    — inline keyboards: confirm_delete + folder_decision
   integrations/
     apple_notes.py
@@ -89,6 +91,17 @@ cd ~/Desktop/second-brain-agent-v2
 - Tool handlers: `async def handler(args: dict) -> {"content": [{"type": "text", "text": "..."}]}`
 - SDK запускает Claude Code CLI как subprocess → нельзя вложенно из Claude Code сессии
 - Module-level globals `_db`, `_notifier`, `_config` — injected via `setup()`
+
+## Самодостраивание (agent.py)
+
+- Инструмент `propose_capability_extension` — отправляет кнопки в Telegram: `✅ Разрешить / ❌ Отменить`
+- Поддерживаемые actions: `pip_install`, `add_config_value`, `restart_bot`
+- `extension_registry.py` — хранит pending actions, доступен и из agent.py, и из handlers.py
+- Callbacks `ext_ok:{id}` / `ext_deny:{id}` в handlers.py — выполняют или отменяют действие
+- Безопасность: валидация package name (только `[a-zA-Z0-9_\-]`), запрет на системные команды
+- После pip_install или add_config_value — автоматический перезапуск бота через launchctl
+- WebSearch и WebFetch добавлены напрямую в Main Agent (не через Research subagent)
+- Системный промпт: агент НИКОГДА не говорит "не могу" — предлагает расширение. Если расширение требует ручной настройки — сначала честно описывает что нужно сделать вручную
 
 ## Finance модуль
 
