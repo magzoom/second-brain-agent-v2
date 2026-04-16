@@ -154,7 +154,7 @@ async def cmd_log(message: Message) -> None:
 
 # ── Shared agent runner ───────────────────────────────────────────────────────
 
-async def _run_agent(message: Message, text: str, status_msg) -> None:
+async def _run_agent(message: Message, text: str, status_msg, timeout: int = 180) -> None:
     """Common logic for calling Main Agent. Used by text and voice handlers."""
     chat_id = message.chat.id
     if chat_id not in _chat_history:
@@ -174,7 +174,7 @@ async def _run_agent(message: Message, text: str, status_msg) -> None:
         async with Database(db_path) as db:
             result = await asyncio.wait_for(
                 main_agent.run_main_agent(full_message, db=db, notifier=notifier, config=_config),
-                timeout=180,
+                timeout=timeout,
             )
 
         result = result or "Готово."

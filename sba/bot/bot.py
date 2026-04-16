@@ -24,7 +24,7 @@ async def _send_resume(bot: Bot, resume: dict, config: dict) -> None:
     try:
         status = await bot.send_message(chat_id, f"↩️ Продолжаю выполнение:\n<i>{text[:200]}</i>")
         from sba.bot.handlers import _run_agent
-        await _run_agent(status, text, status)
+        await _run_agent(status, text, status, timeout=300)
     except Exception as e:
         logger.error(f"Resume failed: {e}", exc_info=True)
 

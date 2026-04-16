@@ -30,8 +30,8 @@ def apply_pending_tool(tool_name: str, tool_fn_name: str, tool_code: str) -> tup
     except SyntaxError as e:
         return False, f"Синтаксическая ошибка в коде инструмента: {e}"
 
-    # 2. Check not already present
-    if tool_fn_name in content:
+    # 2. Check not already present (look for actual function definition, not mentions in strings)
+    if f"async def {tool_fn_name}" in content or f"def {tool_fn_name}" in content:
         return False, f"Функция {tool_fn_name} уже существует в agent.py"
 
     # 3. Verify all markers exist before touching file
