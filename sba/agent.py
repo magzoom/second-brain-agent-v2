@@ -683,6 +683,45 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
         return _ok("\n".join(lines))
 
 
+@tool("propose_tool_addition",
+    "Предложить добавить новый инструмент в агента. Используй когда нужен инструмент которого нет, и ты можешь написать его код.",
+    {
+        "type": "object",
+        "properties": {
+            "tool_name": {"type": "string", "description": "snake_case имя инструмента (например: get_youtube_transcript)"},
+            "tool_fn_name": {"type": "string", "description": "Имя Python функции с префиксом _ и суффиксом _tool (например: _get_youtube_transcript_tool)"},
+            "tool_description": {"type": "string", "description": "Одна строка: что делает инструмент"},
+            "tool_code": {"type": "string", "description": "Полный Python код инструмента с @tool декоратором. Используй паттерн: @tool(name, desc, schema) async def _name_tool(args: dict) -> dict: ... return _ok(result)"},
+            "resume_message": {"type": "string", "description": "Исходный запрос пользователя — будет выполнен автоматически после добавления инструмента"},
+        },
+        "required": ["tool_name", "tool_fn_name", "tool_description", "tool_code", "resume_message"],
+    }
+)
+async def _propose_tool_addition_tool(args: dict) -> dict:
+    import json
+    from pathlib import Path as _Path
+
+    pending_file = _Path.home() / ".sba" / "pending_tool.json"
+    pending_file.write_text(json.dumps(args, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    tool_name = args.get("tool_name", "")
+    tool_desc = args.get("tool_description", "")
+
+    keyboard = {"inline_keyboard": [[
+        {"text": "✅ Применить", "callback_data": "tool_apply_ok"},
+        {"text": "❌ Отмена", "callback_data": "tool_apply_deny"},
+    ]]}
+
+    text = (
+        f"🔧 <b>Новый инструмент: <code>{tool_name}</code></b>\n\n"
+        f"{tool_desc}\n\n"
+        f"Код будет добавлен в <code>sba/agent.py</code>, проверен и применён автоматически."
+    )
+
+    await _notifier.send_message(text, reply_markup=keyboard)
+    return _ok(f"Предложение добавить инструмент '{tool_name}' отправлено пользователю. Жду подтверждения.")
+
+
 @tool("propose_capability_extension",
     "Предложить расширение возможностей бота. Используй когда нужна недостающая библиотека, API-ключ или перезапуск.",
     {
@@ -751,6 +790,7 @@ _main_server = create_sdk_mcp_server(
         _finance_manage_recurring_tool,
         _finance_list_recurring_tool,
         _propose_extension_tool,
+        _propose_tool_addition_tool,
     ],
 )
 
@@ -788,15 +828,29 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 Всегда выбирай самый прямой путь к содержимому, а не обходной.
 
 Самодостраивание (ВАЖНО):
-Если задача требует отсутствующего инструмента или библиотеки — НИКОГДА не говори "не могу", "нет доступа", "эта функция недоступна".
-Вместо этого:
-1. Определи что именно нужно (pip-пакет, API-ключ, перезапуск)
-2. Оцени: потребует ли это ручной настройки после установки (QR-код, авторизация в браузере, регистрация на стороннем сервисе и т.п.)?
-   - Если да → честно опиши что потребуется от пользователя вручную, затем предложи расширение
-3. Оцени: передаются ли персональные данные на внешний сервис?
-   - Нет → вызови propose_capability_extension (пользователь подтвердит кнопкой)
-   - Да → объясни что нужно и попроси пользователя предоставить данные явно
-4. После одобрения пользователя действие выполнится автоматически
+Если задача требует отсутствующего инструмента — НИКОГДА не говори "не могу", "нет доступа", "эта функция недоступна".
+Вместо этого выбери один из двух путей:
+
+Путь A — нужно написать новый инструмент (ты умеешь писать его код):
+→ вызови propose_tool_addition с полным Python кодом инструмента.
+Паттерн кода инструмента:
+```
+@tool("tool_name", "описание", {"type":"object","properties":{...},"required":[...]})
+async def _tool_name_tool(args: dict) -> dict:
+    # импорты внутри функции
+    ...
+    return _ok("результат")
+```
+Примеры когда использовать: get_youtube_transcript, parse_pdf, send_email, read_local_file.
+
+Путь Б — нужна внешняя зависимость (pip-пакет, API-ключ, перезапуск):
+1. Оцени: потребует ли ручной настройки (QR-код, регистрация и т.п.)?
+   - Да → сначала честно опиши что нужно вручную
+2. Оцени: передаются ли персональные данные наружу?
+   - Нет → вызови propose_capability_extension
+   - Да → объясни и попроси данные явно
+
+Правило: всегда предпочитай Путь A если можешь написать код сам. Путь Б — только если нужен внешний сервис/ключ/пакет без кода.
 Правило: любое расширение только с явным подтверждением пользователя.
 
 Индексация базы знаний:
@@ -916,6 +970,7 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__finance_manage_recurring",
             "mcp__sba__finance_list_recurring",
             "mcp__sba__propose_capability_extension",
+            "mcp__sba__propose_tool_addition",
             "WebSearch",   # прямой веб-поиск
             "WebFetch",    # чтение страниц
             "Task",        # вызов Research Agent (для сложных multi-step запросов)

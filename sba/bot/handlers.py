@@ -1091,6 +1091,58 @@ async def callback_ext_deny(callback: CallbackQuery) -> None:
         pass
 
 
+@router.callback_query(F.data == "tool_apply_ok")
+async def callback_tool_apply_ok(callback: CallbackQuery) -> None:
+    """Apply auto-generated tool code to agent.py."""
+    if not _is_owner_callback(callback):
+        return
+    await callback.answer()
+
+    import json
+    pending_file = Path.home() / ".sba" / "pending_tool.json"
+    if not pending_file.exists():
+        await callback.message.edit_text("⚠️ Запрос устарел.")
+        return
+
+    data = json.loads(pending_file.read_text(encoding="utf-8"))
+    tool_name = data.get("tool_name", "")
+    tool_fn_name = data.get("tool_fn_name", "")
+    tool_code = data.get("tool_code", "")
+    resume_message = data.get("resume_message", "")
+
+    await callback.message.edit_text(f"⏳ Применяю инструмент <code>{tool_name}</code>...")
+
+    from sba.tool_applicator import apply_pending_tool
+    ok, error = apply_pending_tool(tool_name, tool_fn_name, tool_code)
+
+    if not ok:
+        await callback.message.edit_text(
+            f"❌ Не удалось применить <code>{tool_name}</code>:\n\n<code>{error}</code>"
+        )
+        return
+
+    pending_file.unlink(missing_ok=True)
+
+    if resume_message:
+        _save_resume(callback.message.chat.id, resume_message)
+
+    await callback.message.edit_text(
+        f"✅ Инструмент <code>{tool_name}</code> добавлен в агента.\n\n"
+        f"Перезапускаю бота, продолжу выполнение запроса..."
+    )
+    import subprocess as sp, os
+    sp.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.sba.bot"])
+
+
+@router.callback_query(F.data == "tool_apply_deny")
+async def callback_tool_apply_deny(callback: CallbackQuery) -> None:
+    if not _is_owner_callback(callback):
+        return
+    await callback.answer()
+    (Path.home() / ".sba" / "pending_tool.json").unlink(missing_ok=True)
+    await callback.message.edit_text("❌ Добавление инструмента отменено.")
+
+
 @router.callback_query(F.data.startswith("cancel_del:"))
 async def callback_cancel_del(callback: CallbackQuery) -> None:
     if not _is_owner_callback(callback):
