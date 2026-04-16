@@ -725,6 +725,81 @@ async def _request_capability_development_tool(args: dict) -> dict:
     return _ok(f"Запрос на разработку инструмента '{tool_name}' отправлен. Claude Code займётся этим.")
 
 
+@tool("get_youtube_transcript", "Получить полный транскрипт (субтитры) YouTube видео по ссылке или ID.", {
+    "type": "object",
+    "properties": {
+        "video_url": {"type": "string", "description": "Полная ссылка на YouTube видео (https://youtube.com/watch?v=...) или ID видео"},
+    },
+    "required": ["video_url"],
+})
+async def _get_youtube_transcript_tool(args: dict[str, Any]) -> dict[str, Any]:
+    import re as _re
+    video_url = args.get("video_url", "").strip()
+
+    # Extract video ID from URL or use as-is
+    patterns = [
+        r"(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/)([A-Za-z0-9_-]{11})",
+        r"^([A-Za-z0-9_-]{11})$",
+    ]
+    video_id = None
+    for pat in patterns:
+        m = _re.search(pat, video_url)
+        if m:
+            video_id = m.group(1)
+            break
+    if not video_id:
+        return _ok(f"Не удалось извлечь ID видео из: {video_url}")
+
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+    except ImportError:
+        return _ok("Библиотека youtube-transcript-api не установлена. Вызови propose_capability_extension для установки пакета youtube-transcript-api.")
+
+    try:
+        transcript_list = await asyncio.to_thread(YouTubeTranscriptApi.list_transcripts, video_id)
+    except TranscriptsDisabled:
+        return _ok(f"Субтитры отключены для видео {video_id}.")
+    except Exception as e:
+        return _ok(f"Не удалось получить список субтитров для {video_id}: {e}")
+
+    # Try auto-generated first, then manual
+    transcript = None
+    for try_generated in (True, False):
+        for lang in ("ru", "en", None):
+            try:
+                if lang:
+                    if try_generated:
+                        transcript = transcript_list.find_generated_transcript([lang])
+                    else:
+                        transcript = transcript_list.find_manually_created_transcript([lang])
+                else:
+                    # Any available
+                    all_tr = list(transcript_list)
+                    if all_tr:
+                        transcript = all_tr[0]
+                if transcript:
+                    break
+            except (NoTranscriptFound, Exception):
+                continue
+        if transcript:
+            break
+
+    if not transcript:
+        return _ok(f"Субтитры не найдены для видео {video_id} ни на одном языке.")
+
+    try:
+        entries = await asyncio.to_thread(transcript.fetch)
+    except Exception as e:
+        return _ok(f"Не удалось загрузить субтитры ({transcript.language}): {e}")
+
+    text = " ".join(e.get("text", "") for e in entries if e.get("text"))
+    if not text.strip():
+        return _ok(f"Транскрипт пустой для видео {video_id}.")
+
+    lang_info = f"{transcript.language} ({'авто' if transcript.is_generated else 'ручные'})"
+    return _ok(f"Транскрипт ({lang_info}):\n\n{text}")
+
+
 @tool("propose_capability_extension",
     "Предложить расширение возможностей бота. Используй когда нужна недостающая библиотека, API-ключ или перезапуск.",
     {
@@ -793,6 +868,7 @@ _main_server = create_sdk_mcp_server(
         _finance_list_recurring_tool,
         _propose_extension_tool,
         _request_capability_development_tool,
+        _get_youtube_transcript_tool,
     ],
 )
 
@@ -970,6 +1046,7 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__finance_list_recurring",
             "mcp__sba__propose_capability_extension",
             "mcp__sba__request_capability_development",
+            "mcp__sba__get_youtube_transcript",
             "WebSearch",   # прямой веб-поиск
             "WebFetch",    # чтение страниц
             "Task",        # вызов Research Agent (для сложных multi-step запросов)
