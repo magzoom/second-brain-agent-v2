@@ -783,26 +783,29 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
 
     video_url = args.get("video_url", "")
 
-    # Extract video ID
     match = re.search(r'(?:v=|youtu\.be/|/v/|/embed/)([A-Za-z0-9_-]{11})', video_url)
     if not match:
         return _ok("Ошибка: не удалось извлечь ID видео из URL.")
     video_id = match.group(1)
 
-    def _fetch_transcript(vid_id: str):
+    def _fetch_via_api(vid_id: str):
         from youtube_transcript_api import YouTubeTranscriptApi
-        from youtube_transcript_api._errors import NoTranscriptFound, TranscriptsDisabled
+        from youtube_transcript_api._errors import (
+            NoTranscriptFound, TranscriptsDisabled, RequestBlocked, IpBlocked,
+            PoTokenRequired, VideoUnavailable, VideoUnplayable,
+        )
 
         api = YouTubeTranscriptApi()
 
         try:
             transcript_list = api.list(vid_id)
-        except TranscriptsDisabled:
-            return None, None, "Субтитры недоступны для этого видео"
+        except (RequestBlocked, IpBlocked, PoTokenRequired) as e:
+            return None, None, f"IP_BLOCKED:{e}"
+        except (TranscriptsDisabled, VideoUnavailable, VideoUnplayable) as e:
+            return None, None, f"Субтитры недоступны: {e}"
         except Exception as e:
-            return None, None, f"Ошибка получения транскрипта: {e}"
+            return None, None, f"Ошибка: {e}"
 
-        # Try manual first, then auto-generated; prefer any language
         transcript = None
         lang = None
 
@@ -824,7 +827,6 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
                     pass
 
         if transcript is None:
-            # Last resort: take first available from iterator
             try:
                 transcript = next(iter(transcript_list))
                 lang = transcript.language_code
@@ -834,13 +836,76 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
         try:
             fetched = transcript.fetch()
             entries = fetched.to_raw_data()
+        except (RequestBlocked, IpBlocked, PoTokenRequired) as e:
+            return None, None, f"IP_BLOCKED:{e}"
         except Exception as e:
-            return None, None, f"Ошибка загрузки транскрипта: {e}"
+            return None, None, f"Ошибка загрузки: {e}"
 
         full_text = " ".join(entry.get("text", "") for entry in entries)
         return full_text, lang, None
 
-    full_text, language, error = await _asyncio.to_thread(_fetch_transcript, video_id)
+    def _fetch_via_ytdlp(url: str):
+        import subprocess
+        import tempfile
+        import os
+        import glob as _glob
+        import re as _re
+
+        from pathlib import Path
+        ytdlp_path = str(Path.home() / ".sba" / "venv" / "bin" / "yt-dlp")
+        if not os.path.exists(ytdlp_path):
+            ytdlp_path = "yt-dlp"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_tmpl = os.path.join(tmpdir, "sub.%(id)s")
+            cmd = [
+                ytdlp_path,
+                "--skip-download",
+                "--write-auto-sub",
+                "--write-sub",
+                "--sub-langs", "ru,en,en-US,ru-RU",
+                "--sub-format", "vtt",
+                "--no-playlist",
+                "--extractor-args", "youtube:player_client=ios,web",
+                "--output", out_tmpl,
+                url,
+            ]
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=60
+                )
+            except subprocess.TimeoutExpired:
+                return None, None, "yt-dlp timeout"
+            except FileNotFoundError:
+                return None, None, "yt-dlp не найден"
+
+            vtt_files = _glob.glob(os.path.join(tmpdir, "*.vtt"))
+            if not vtt_files:
+                stderr_short = result.stderr[-500:] if result.stderr else ""
+                return None, None, f"yt-dlp не нашёл субтитры. stderr: {stderr_short}"
+
+            vtt_path = vtt_files[0]
+            lang = _re.search(r'\.([a-z]{2}(?:-[A-Z]{2})?)\.vtt$', vtt_path)
+            lang = lang.group(1) if lang else "unknown"
+
+            with open(vtt_path, encoding="utf-8") as f:
+                raw = f.read()
+
+            lines = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line or line.startswith("WEBVTT") or "-->" in line or line.isdigit():
+                    continue
+                line = _re.sub(r'<[^>]+>', '', line)
+                if line and (not lines or lines[-1] != line):
+                    lines.append(line)
+
+            return " ".join(lines), lang, None
+
+    full_text, language, error = await _asyncio.to_thread(_fetch_via_api, video_id)
+
+    if error and error.startswith("IP_BLOCKED:"):
+        full_text, language, error = await _asyncio.to_thread(_fetch_via_ytdlp, video_url)
 
     if error:
         return _ok(error)
@@ -885,6 +950,11 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 
 Твоя задача: GTD + организация жизни. Обрабатывай запросы пользователя.
 
+ОБЯЗАТЕЛЬНЫЕ ПАТТЕРНЫ (выполняй немедленно, без раздумий):
+- Пользователь прислал YouTube ссылку → нет инструмента get_youtube_transcript → СРАЗУ Путь А (WebSearch решений → request_capability_development). Не пробуй загрузить сам, не проси уточнений.
+- Пользователь прислал PDF/документ → нет инструмента parse → СРАЗУ Путь А.
+- Любой инструмент вернул ошибку блокировки/IP/rate limit → СРАЗУ Путь В (WebSearch обходных решений → request_capability_development). Не сдавайся, не проси помощи у пользователя.
+
 Категории жизни:
 1_Health_Energy, 2_Business_Career, 3_Finance,
 4_Family_Relationships, 5_Personal Growth, 6_Brightness life, 7_Spirituality
@@ -913,10 +983,16 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 Всегда выбирай самый прямой путь к содержимому, а не обходной.
 
 Самодостраивание (ВАЖНО):
-Если задача требует отсутствующего инструмента — НИКОГДА не говори "не могу", "нет доступа", "эта функция недоступна".
+НИКОГДА не говори "не могу", "нет доступа", "эта функция недоступна", "YouTube блокирует", "не удалось загрузить", "попробуй сам", "скажи название", "помоги мне", "как называется", "уточни".
+НИКОГДА не проси пользователя предоставить дополнительную информацию чтобы обойти техническую проблему — это твоя проблема, не его.
+Если что-то не получилось — это сигнал идти по одному из путей ниже, а не сдаваться.
+Установка пакета через Путь Б — это НЕ решение само по себе. Если задача требует вызова этого пакета — нужен ещё и инструмент (Путь А).
 Вместо этого выбери путь:
 
 Путь A — нужен новый инструмент (например: get_youtube_transcript, parse_pdf, send_email):
+Типичные триггеры: пользователь прислал YouTube ссылку → нет инструмента transcript; прислал PDF → нет парсера; просит отправить email → нет инструмента.
+Веб-поиск не заменяет инструмент — если в интернете нет готового транскрипта/контента, нужен инструмент.
+Путь Б (pip install) не заменяет Путь А — если установил пакет но инструмента нет, нужно идти ещё и по Пути А.
 1. Сделай несколько WebSearch запросов с разными углами:
    - "<задача> python library 2025"
    - "<задача> mcp server"
@@ -925,7 +1001,7 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
    - Надёжность (активно поддерживается? звёзды/отзывы?)
    - Сложность интеграции (pip install vs требует API ключ vs требует сервер)
    - Ограничения (IP-блоки, лимиты, платность)
-3. Выбери лучший вариант с обоснованием
+3. Выбери лучший вариант САМОСТОЯТЕЛЬНО по приоритету: бесплатно > платно, pip install > требует сервер, без регистрации > с регистрацией. НЕ спрашивай пользователя какой вариант выбрать — это твоё решение.
 4. Вызови request_capability_development — передай название инструмента, описание задачи, выбранное решение и почему оно лучше альтернатив
 Claude Code разработает инструмент автоматически и бот перезапустится.
 
