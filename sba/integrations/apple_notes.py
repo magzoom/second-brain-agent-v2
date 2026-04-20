@@ -273,34 +273,34 @@ def move_note_by_id(note_id: str, target_folder: str, retries: int = 3, retry_de
 
 
 def delete_note_by_id(note_id: str) -> bool:
-    """Delete a note by its stable JXA ID (x-coredata://...)."""
-    safe_id = note_id.replace("\\", "\\\\").replace('"', '\\"')
-    jxa_script = f"""
-var app = Application("Notes");
-var notes = app.notes();
-for (var i = 0; i < notes.length; i++) {{
-    if (notes[i].id() === "{safe_id}") {{
-        notes[i].delete();
-        "ok";
-        break;
-    }}
-}}
-"not_found";
-"""
-    result = subprocess.run(
-        ["osascript", "-l", "JavaScript", "-e", jxa_script],
-        capture_output=True, text=True, timeout=60,
-    )
-    if result.returncode != 0:
-        logger.error(f"Failed to delete note by id '{note_id}': {result.stderr.strip()}")
+    """Delete a note by its stable ID (x-coredata://...) using AppleScript direct lookup."""
+    safe_id = _escape_applescript(note_id)
+    script = f"""
+    tell application "Notes"
+        try
+            set matchedNote to note id "{safe_id}"
+            delete matchedNote
+            return "ok"
+        on error errMsg number errNum
+            if errNum is -1728 then
+                return "not_found"
+            else
+                error errMsg number errNum
+            end if
+        end try
+    end tell
+    """
+    result = _run_osascript(script)
+    if result["returncode"] != 0:
+        logger.error(f"Failed to delete note by id '{note_id}': {result['stderr'].strip()}")
         return False
-    success = "ok" in result.stdout
-    not_found = not success and "not_found" in result.stdout
+    success = "ok" in result["stdout"]
+    not_found = "not_found" in result["stdout"]
     if success:
         logger.info(f"Deleted note {note_id}")
     elif not_found:
         logger.info(f"Note {note_id} already deleted (not found)")
-    return success or not_found  # both mean goal achieved — note is gone
+    return success or not_found
 
 
 def list_folders() -> list[str]:

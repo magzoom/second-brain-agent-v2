@@ -768,11 +768,13 @@ async def _propose_extension_tool(args: dict[str, Any]) -> dict[str, Any]:
 
 
 @tool("get_youtube_transcript",
-    "Получить полный текстовый транскрипт YouTube-видео по его URL.",
+    "Получить транскрипт YouTube-видео и преобразовать в нужный формат: summary (по умолчанию), chapters, thread, blog, quotes.",
     {
         "type": "object",
         "properties": {
-            "video_url": {"type": "string", "description": "URL YouTube-видео"},
+            "video_url": {"type": "string", "description": "URL YouTube-видео (любой формат: watch, youtu.be, shorts, embed)"},
+            "format": {"type": "string", "description": "Формат вывода: summary (краткое резюме), chapters (главы с таймкодами), thread (Twitter-тред), blog (статья с разделами), quotes (цитаты с таймкодами). По умолчанию: summary", "enum": ["summary", "chapters", "thread", "blog", "quotes"]},
+            "language": {"type": "string", "description": "Предпочитаемый язык субтитров через запятую, например 'ru,en'. По умолчанию: ru,en"},
         },
         "required": ["video_url"],
     }
@@ -782,13 +784,17 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
     import asyncio as _asyncio
 
     video_url = args.get("video_url", "")
+    output_format = args.get("format", "summary")
+    language_pref = args.get("language", "ru,en")
 
-    match = re.search(r'(?:v=|youtu\.be/|/v/|/embed/)([A-Za-z0-9_-]{11})', video_url)
+    match = re.search(r'(?:v=|youtu\.be/|/v/|/embed/|/shorts/)([A-Za-z0-9_-]{11})', video_url)
     if not match:
         return _ok("Ошибка: не удалось извлечь ID видео из URL.")
     video_id = match.group(1)
 
-    def _fetch_via_api(vid_id: str):
+    preferred_langs = [l.strip() for l in language_pref.split(",") if l.strip()]
+
+    def _fetch_via_api(vid_id: str, langs: list):
         from youtube_transcript_api import YouTubeTranscriptApi
         from youtube_transcript_api._errors import (
             NoTranscriptFound, TranscriptsDisabled, RequestBlocked, IpBlocked,
@@ -809,14 +815,26 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
         transcript = None
         lang = None
 
-        manual_codes = [t.language_code for t in transcript_list._manually_created_transcripts.values()]
-        if manual_codes:
+        # Try preferred languages first
+        for preferred in langs:
             try:
-                transcript = transcript_list.find_manually_created_transcript(manual_codes)
+                transcript = transcript_list.find_transcript([preferred])
                 lang = transcript.language_code
+                break
             except Exception:
                 pass
 
+        # Fall back to manually created transcripts
+        if transcript is None:
+            manual_codes = [t.language_code for t in transcript_list._manually_created_transcripts.values()]
+            if manual_codes:
+                try:
+                    transcript = transcript_list.find_manually_created_transcript(manual_codes)
+                    lang = transcript.language_code
+                except Exception:
+                    pass
+
+        # Fall back to generated transcripts
         if transcript is None:
             generated_codes = [t.language_code for t in transcript_list._generated_transcripts.values()]
             if generated_codes:
@@ -826,6 +844,7 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
                 except Exception:
                     pass
 
+        # Last resort: first available
         if transcript is None:
             try:
                 transcript = next(iter(transcript_list))
@@ -841,10 +860,16 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
         except Exception as e:
             return None, None, f"Ошибка загрузки: {e}"
 
-        full_text = " ".join(entry.get("text", "") for entry in entries)
-        return full_text, lang, None
+        return entries, lang, None
 
-    def _fetch_via_ytdlp(url: str):
+    def _format_timestamp(seconds: float) -> str:
+        s = int(seconds)
+        h, m, s = s // 3600, (s % 3600) // 60, s % 60
+        if h > 0:
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+
+    def _fetch_via_ytdlp(url: str, langs: list):
         import subprocess
         import tempfile
         import os
@@ -856,6 +881,8 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
         if not os.path.exists(ytdlp_path):
             ytdlp_path = "yt-dlp"
 
+        lang_str = ",".join(langs + ["en-US", "ru-RU"]) if langs else "ru,en,en-US,ru-RU"
+
         with tempfile.TemporaryDirectory() as tmpdir:
             out_tmpl = os.path.join(tmpdir, "sub.%(id)s")
             cmd = [
@@ -863,7 +890,7 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
                 "--skip-download",
                 "--write-auto-sub",
                 "--write-sub",
-                "--sub-langs", "ru,en,en-US,ru-RU",
+                "--sub-langs", lang_str,
                 "--sub-format", "vtt",
                 "--no-playlist",
                 "--extractor-args", "youtube:player_client=ios,web",
@@ -871,9 +898,7 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
                 url,
             ]
             try:
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, timeout=60
-                )
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             except subprocess.TimeoutExpired:
                 return None, None, "yt-dlp timeout"
             except FileNotFoundError:
@@ -885,32 +910,227 @@ async def _get_youtube_transcript_tool(args: dict) -> dict:
                 return None, None, f"yt-dlp не нашёл субтитры. stderr: {stderr_short}"
 
             vtt_path = vtt_files[0]
-            lang = _re.search(r'\.([a-z]{2}(?:-[A-Z]{2})?)\.vtt$', vtt_path)
-            lang = lang.group(1) if lang else "unknown"
+            lang_match = _re.search(r'\.([a-z]{2}(?:-[A-Z]{2})?)\.vtt$', vtt_path)
+            lang = lang_match.group(1) if lang_match else "unknown"
 
             with open(vtt_path, encoding="utf-8") as f:
                 raw = f.read()
 
-            lines = []
+            # Parse VTT with timestamps for structured output
+            entries = []
+            current_start = None
             for line in raw.splitlines():
                 line = line.strip()
-                if not line or line.startswith("WEBVTT") or "-->" in line or line.isdigit():
-                    continue
-                line = _re.sub(r'<[^>]+>', '', line)
-                if line and (not lines or lines[-1] != line):
-                    lines.append(line)
+                ts_match = _re.match(r'(\d+:\d+:\d+\.\d+|\d+:\d+\.\d+)\s+-->', line)
+                if ts_match:
+                    ts_str = ts_match.group(1)
+                    parts = ts_str.replace('.', ':').split(':')
+                    if len(parts) == 4:
+                        current_start = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                    elif len(parts) == 3:
+                        current_start = int(parts[0]) * 60 + int(parts[1])
+                elif line and not line.startswith("WEBVTT") and not line.isdigit() and current_start is not None:
+                    clean = _re.sub(r'<[^>]+>', '', line)
+                    if clean and (not entries or entries[-1].get("text") != clean):
+                        entries.append({"text": clean, "start": float(current_start), "duration": 3.0})
 
-            return " ".join(lines), lang, None
+            return entries, lang, None
 
-    full_text, language, error = await _asyncio.to_thread(_fetch_via_api, video_id)
+    # Fetch transcript
+    entries, language, error = await _asyncio.to_thread(_fetch_via_api, video_id, preferred_langs)
 
     if error and error.startswith("IP_BLOCKED:"):
-        full_text, language, error = await _asyncio.to_thread(_fetch_via_ytdlp, video_url)
+        entries, language, error = await _asyncio.to_thread(_fetch_via_ytdlp, video_url, preferred_langs)
 
     if error:
         return _ok(error)
 
-    return _ok(f"language: {language}\n\nfull_transcript:\n{full_text}")
+    if not entries:
+        return _ok("Транскрипт пуст.")
+
+    # Build plain text and timestamped text
+    full_text = " ".join(entry.get("text", "") for entry in entries)
+
+    # Chunking for long transcripts
+    CHUNK_LIMIT = 50000
+    if len(full_text) > CHUNK_LIMIT:
+        # Return chunked summary instruction
+        chunks = []
+        chunk_size = 40000
+        overlap = 2000
+        start = 0
+        while start < len(full_text):
+            end = min(start + chunk_size, len(full_text))
+            chunks.append(full_text[start:end])
+            start = end - overlap if end < len(full_text) else end
+        chunk_info = f"[Транскрипт длинный ({len(full_text)} символов), разбит на {len(chunks)} частей]\n\n"
+        # Return first chunk with note
+        return _ok(
+            f"language: {language}\n"
+            f"format_requested: {output_format}\n"
+            f"total_length: {len(full_text)} chars\n"
+            f"chunks: {len(chunks)}\n\n"
+            f"CHUNK 1/{len(chunks)}:\n{chunks[0]}\n\n"
+            f"{'CHUNK 2/' + str(len(chunks)) + ':' + chr(10) + chunks[1] if len(chunks) > 1 else ''}"
+        )
+
+    # Build timestamped version for chapters/quotes
+    if output_format in ("chapters", "quotes"):
+        timestamped_lines = []
+        prev_ts = -1
+        for entry in entries:
+            ts = entry.get("start", 0)
+            if ts - prev_ts >= 30:  # every 30 seconds
+                timestamped_lines.append(f"[{_format_timestamp(ts)}] {entry.get('text', '')}")
+                prev_ts = ts
+            else:
+                timestamped_lines.append(entry.get("text", ""))
+        transcript_body = "\n".join(timestamped_lines)
+    else:
+        transcript_body = full_text
+
+    format_instructions = {
+        "summary": "Напиши краткое резюме видео (5-10 предложений) на основе транскрипта.",
+        "chapters": "Раздели транскрипт на главы по тематическим переходам. Формат: ММ:СС Название — краткое описание. Используй реальные таймкоды из транскрипта.",
+        "thread": "Преобразуй в Twitter/X тред. Пронумерованные посты, каждый до 280 символов. Первый пост — главная мысль видео.",
+        "blog": "Напиши статью с заголовком, введением, разделами и ключевыми выводами.",
+        "quotes": "Выбери 5-10 ключевых цитат из транскрипта с таймкодами. Формат: [ММ:СС] «цитата»",
+    }
+
+    instruction = format_instructions.get(output_format, format_instructions["summary"])
+
+    return _ok(
+        f"language: {language}\n"
+        f"format_requested: {output_format}\n"
+        f"instruction: {instruction}\n\n"
+        f"transcript:\n{transcript_body}"
+    )
+
+
+@tool("get_weather",
+    "Получить прогноз погоды. Используй сохранённую геолокацию или укажи город.",
+    {
+        "type": "object",
+        "properties": {
+            "location": {"type": "string", "description": "Город или координаты. Если не указан — берётся сохранённая геолокация или Astana по умолчанию."},
+            "day": {"type": "string", "description": "today или tomorrow. По умолчанию: today", "enum": ["today", "tomorrow"]},
+        },
+        "required": [],
+    }
+)
+async def _get_weather_tool(args: dict) -> dict:
+    import asyncio as _asyncio
+    import urllib.request as _ur, json as _json
+    from pathlib import Path as _Path
+
+    day = args.get("day", "today")
+    location = args.get("location", "").strip()
+
+    # Use saved GPS if no location specified
+    if not location:
+        loc_file = _Path.home() / ".sba" / "last_location.json"
+        if loc_file.exists():
+            try:
+                loc = _json.loads(loc_file.read_text())
+                location = f"{loc['lat']},{loc['lon']}"
+            except Exception:
+                pass
+    if not location:
+        if _config:
+            location = _config.get("digest", {}).get("location", "Astana")
+        else:
+            location = "Astana"
+
+    def _fetch():
+        url = f"https://wttr.in/{location}?format=j1"
+        req = _ur.Request(url, headers={"User-Agent": "curl/7.88.1"})
+        with _ur.urlopen(req, timeout=8) as resp:
+            data = _json.loads(resp.read())
+        idx = 0 if day == "today" else 1
+        fc = data["weather"][idx]
+        cur = data["current_condition"][0]
+        desc = (fc["hourly"][4].get("weatherDesc") or [{}])[0].get("value", "")
+        t_min, t_max = fc["mintempC"], fc["maxtempC"]
+        area = data.get("nearest_area", [{}])[0].get("areaName", [{}])[0].get("value", location)
+        label = "Сегодня" if day == "today" else "Завтра"
+        extra = ""
+        if day == "today":
+            temp_now = cur["temp_C"]
+            feels = cur["FeelsLikeC"]
+            humidity = cur["humidity"]
+            extra = f"\nСейчас: {temp_now}°C (ощущается {feels}°C), влажность {humidity}%"
+        return f"🌤 {label} в {area}: {desc}, {t_min}–{t_max}°C{extra}"
+
+    try:
+        result = await _asyncio.to_thread(_fetch)
+        return _ok(result)
+    except Exception as e:
+        return _ok(f"Не удалось получить погоду: {e}")
+
+
+@tool("parse_document",
+    "Извлечь текст из PDF, DOCX или текстового файла по его локальному пути.",
+    {
+        "type": "object",
+        "properties": {
+            "file_path": {"type": "string", "description": "Полный путь к файлу на диске"},
+            "max_chars": {"type": "integer", "description": "Максимум символов для возврата. По умолчанию 15000"},
+        },
+        "required": ["file_path"],
+    }
+)
+async def _parse_document_tool(args: dict) -> dict:
+    import asyncio as _asyncio
+    from pathlib import Path as _Path
+
+    file_path = args.get("file_path", "").replace("~", str(_Path.home()))
+    max_chars = int(args.get("max_chars", 15000))
+    p = _Path(file_path)
+    if not p.exists():
+        return _ok(f"Файл не найден: {file_path}")
+
+    suffix = p.suffix.lower()
+
+    def _extract() -> str:
+        if suffix == ".pdf":
+            try:
+                import fitz  # pymupdf
+                doc = fitz.open(str(p))
+                parts = [page.get_text() for page in doc]
+                doc.close()
+                return "\n".join(parts)
+            except Exception:
+                try:
+                    from pdfminer.high_level import extract_text
+                    return extract_text(str(p))
+                except Exception as e:
+                    return f"Ошибка чтения PDF: {e}"
+        elif suffix == ".docx":
+            try:
+                import zipfile, re as _re
+                from xml.etree import ElementTree
+                with zipfile.ZipFile(str(p)) as z:
+                    with z.open("word/document.xml") as f:
+                        tree = ElementTree.parse(f)
+                ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+                paras = []
+                for para in tree.iter(f"{ns}p"):
+                    texts = [r.text for r in para.iter(f"{ns}t") if r.text]
+                    if texts:
+                        paras.append("".join(texts))
+                return "\n".join(paras)
+            except Exception as e:
+                return f"Ошибка чтения DOCX: {e}"
+        elif suffix in (".txt", ".md", ".csv", ".json", ".yaml", ".yml"):
+            return p.read_text(encoding="utf-8", errors="replace")
+        else:
+            return f"Формат {suffix} не поддерживается. Поддерживаются: PDF, DOCX, TXT, MD, CSV"
+
+    text = await _asyncio.to_thread(_extract)
+    total = len(text)
+    if total > max_chars:
+        text = text[:max_chars] + f"\n\n[...обрезано: показано {max_chars} из {total} символов]"
+    return _ok(f"файл: {p.name} ({total} символов)\n\n{text}")
 
 
 # ── MCP servers ───────────────────────────────────────────────────────────────
@@ -941,6 +1161,8 @@ _main_server = create_sdk_mcp_server(
         _propose_extension_tool,
         _request_capability_development_tool,
         _get_youtube_transcript_tool,
+        _parse_document_tool,
+        _get_weather_tool,
     ],
 )
 
@@ -952,7 +1174,9 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 
 ОБЯЗАТЕЛЬНЫЕ ПАТТЕРНЫ (выполняй немедленно, без раздумий):
 - Пользователь прислал YouTube ссылку → нет инструмента get_youtube_transcript → СРАЗУ Путь А (WebSearch решений → request_capability_development). Не пробуй загрузить сам, не проси уточнений.
-- Пользователь прислал PDF/документ → нет инструмента parse → СРАЗУ Путь А.
+- Пользователь прислал YouTube ссылку + есть инструмент get_youtube_transcript → СРАЗУ вызывай его. Определяй формат из контекста: "сделай конспект/резюме/о чём" → summary; "раздели на главы/таймкоды" → chapters; "тред/пост" → thread; "статья/блог" → blog; "цитаты" → quotes. По умолчанию: summary. После получения ответа — выполни `instruction` из ответа инструмента.
+- Пользователь прислал PDF/документ + есть инструмент parse_document → СРАЗУ вызывай parse_document(file_path). Путь А только если инструмента нет.
+- Пользователь прислал PDF/документ → нет инструмента parse_document → СРАЗУ Путь А.
 - Любой инструмент вернул ошибку блокировки/IP/rate limit → СРАЗУ Путь В (WebSearch обходных решений → request_capability_development). Не сдавайся, не проси помощи у пользователя.
 
 Категории жизни:
@@ -968,6 +1192,7 @@ SYSTEM_PROMPT_BASE = """Ты — персональный разговорный
 ВАЖНО: Если в сообщении написано "он уже находится в организованной папке, НЕ перемещай его" — ТОЛЬКО вызови index_content. Никаких move_drive_file, никаких задач. Только индексация.
 
 При вопросе пользователя:
+- "погода", "прогноз", "какая погода", "что на улице", "погода на завтра" → get_weather (используй сохранённую локацию; если пользователь назвал город — передай его)
 - "что на сегодня" → get_reminders_today
 - "что на неделе" → get_reminders_upcoming
 - "найди про X", "поищи X", "сколько стоит X", "где купить X", "что такое X" → сначала search_knowledge; если нет — WebSearch напрямую
@@ -1089,6 +1314,7 @@ Claude Code исправит инструмент автоматически и 
 Никаких пояснений, никаких "появится утром", никаких "ссылка сохранена".
 
 Форматирование: только простой текст. Никаких **звёздочек**, никакого Markdown.
+НИКОГДА не используй таблицы (| col | col |) — они нечитабельны в Telegram. Вместо таблицы — список через дефисы или короткие предложения.
 Для выделения используй эмодзи или дефисы. Telegram показывает сообщения как обычный текст."""
 
 
@@ -1148,6 +1374,8 @@ def _build_options(system_prompt: str) -> ClaudeAgentOptions:
             "mcp__sba__propose_capability_extension",
             "mcp__sba__request_capability_development",
             "mcp__sba__get_youtube_transcript",
+            "mcp__sba__parse_document",
+            "mcp__sba__get_weather",
             "WebSearch",   # прямой веб-поиск
             "WebFetch",    # чтение страниц
             "Task",        # вызов Research Agent (для сложных multi-step запросов)

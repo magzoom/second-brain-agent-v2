@@ -173,7 +173,27 @@ async def _send_evening_checkin(db, notifier, today: date) -> None:
             "Если что-то пропустил — добавляй сейчас."
         )
 
-    await notifier.send_message(text)
+    # Append tomorrow's weather if location is known
+    weather_line = ""
+    loc_file = Path.home() / ".sba" / "last_location.json"
+    if loc_file.exists():
+        try:
+            import json as _json, urllib.request as _ur
+            loc = _json.loads(loc_file.read_text())
+            lat, lon = loc["lat"], loc["lon"]
+            url = f"https://wttr.in/{lat},{lon}?format=j1"
+            req = _ur.Request(url, headers={"User-Agent": "curl/7.88.1"})
+            with _ur.urlopen(req, timeout=8) as resp:
+                wdata = _json.loads(resp.read())
+            tmr = wdata["weather"][1]
+            desc = tmr["hourly"][4].get("weatherDesc", [{}])[0].get("value", "")
+            t_min, t_max = tmr["mintempC"], tmr["maxtempC"]
+            area = wdata.get("nearest_area", [{}])[0].get("areaName", [{}])[0].get("value", "")
+            weather_line = f"\n\n🌤 <b>Завтра</b>{' в ' + area if area else ''}: {desc}, {t_min}–{t_max}°C"
+        except Exception as e:
+            logger.debug(f"Weather fetch skipped: {e}")
+
+    await notifier.send_message(text + weather_line)
     logger.info(f"Sent evening check-in: {count} transactions today")
 
 

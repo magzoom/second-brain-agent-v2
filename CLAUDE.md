@@ -140,6 +140,9 @@ cd ~/Desktop/second-brain-agent-v2
 - `finance_get_transactions` — последние транзакции по счёту или всем счетам
 - `finance_manage_recurring` — управление регулярными платежами
 - `finance_list_recurring` — список регулярных платежей
+- `get_youtube_transcript` — транскрипт YouTube-видео + трансформация: summary (по умолч.), chapters, thread, blog, quotes. Параметры: `video_url`, `format`, `language`
+- `parse_document` — извлечь текст из PDF/DOCX/TXT/MD/CSV через pymupdf (fitz) с pdfminer fallback. Параметры: `file_path`, `max_chars` (default 15000)
+- `get_weather` — прогноз погоды через wttr.in (без API-ключа). Читает `~/.sba/last_location.json` если есть, иначе `digest.location` из config. Параметры: `location` (опц.), `day` (today/tomorrow)
 
 ### Псевдонимы счетов (finance.py)
 ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "second" → account_2; "бизнес", "business" → account_biz. Настраиваются под свои банки.
@@ -270,6 +273,10 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - Goal Tracker: JXA batch reads → Haiku трансформирует → постит в канал
 - FTS5: `tokenize='unicode61'` для русского текста
 - Digest: MAX_POSTS=35, MAX_PER_CHANNEL=2, msg.text[:120], max_turns=3, parse_mode=HTML (не markdown); fallback отправляет msg.result если send_digest не был вызван; окно Telegram-постов 16ч; показываются ВСЕ задачи на сегодня + просроченные, ⚠️ если due < today
+- Digest weather: секция 🌤 ПОГОДА между СЕГОДНЯ и ДАЙДЖЕСТ; источник wttr.in; координаты из `~/.sba/last_location.json` → fallback `digest.location` в config (сейчас "Astana")
+- fin_remind вечер (21:00): если есть `~/.sba/last_location.json` — добавляет прогноз на завтра в конец чек-ин сообщения
+- handlers.py location: `F.location` handler сохраняет координаты в `~/.sba/last_location.json` и отвечает прогнозом на завтра
+- handlers.py parse_document: PDF/DOCX/TXT от пользователя → сохраняется в `~/.sba/tmp/`, передаётся агенту → агент вызывает `parse_document(file_path)`; caption сообщения = задача для агента
 - Медиа-уведомления: кнопка "Ознакомлен" → `media_ack:{reg_id}` callback → `folder_done`; `_scan_folder` делает early return если own status == `folder_done`
 - `send_legacy_report` не отправляется если `processed == 0 and errors == 0` (карточки папок уже отправлены индивидуально)
 - Legacy auth failure: при `invalid_grant` ставит `stats["auth_failed"]=True`, шлёт одно сообщение с инструкцией и останавливается (Apple Notes и итоговый отчёт не запускаются). После `sba auth google` нужен ручной запуск или ждать 09:00.

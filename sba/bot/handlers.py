@@ -240,8 +240,9 @@ async def handle_voice_input(message: Message, bot: Bot) -> None:
         result = await asyncio.to_thread(
             mlx_whisper.transcribe,
             str(ogg_path),
-            path_or_hf_repo="mlx-community/whisper-small-mlx",
+            path_or_hf_repo="mlx-community/whisper-medium-mlx",
             initial_prompt=initial_prompt,
+            language="ru",
         )
 
         text = result.get("text", "").strip()
@@ -327,6 +328,40 @@ def _detect_account_from_content(text: str) -> str | None:
     return None
 
 
+def _fetch_tomorrow_weather_by_coords(lat: float, lon: float) -> str:
+    """Fetch tomorrow's weather forecast from wttr.in by coordinates."""
+    import urllib.request, json as _json
+    url = f"https://wttr.in/{lat},{lon}?format=j1"
+    req = urllib.request.Request(url, headers={"User-Agent": "curl/7.88.1"})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = _json.loads(resp.read())
+    tomorrow = data["weather"][1]
+    desc = tomorrow["hourly"][4].get("weatherDesc", [{}])[0].get("value", "")
+    t_min = tomorrow["mintempC"]
+    t_max = tomorrow["maxtempC"]
+    nearest = data.get("nearest_area", [{}])[0]
+    area = nearest.get("areaName", [{}])[0].get("value", f"{lat:.1f},{lon:.1f}")
+    return f"🌤 Завтра в {area}: {desc}, {t_min}–{t_max}°C"
+
+
+@router.message(F.location)
+async def handle_location(message: Message) -> None:
+    """Save user's location and respond with tomorrow's weather forecast."""
+    if not _is_owner(message):
+        return
+    import json as _json, time as _time
+    lat = message.location.latitude
+    lon = message.location.longitude
+    loc_file = Path.home() / ".sba" / "last_location.json"
+    loc_file.write_text(_json.dumps({"lat": lat, "lon": lon, "ts": _time.time()}))
+    try:
+        forecast = await asyncio.to_thread(_fetch_tomorrow_weather_by_coords, lat, lon)
+        await message.answer(f"📍 Локация сохранена\n\n{forecast}")
+    except Exception as e:
+        logger.warning(f"Weather fetch failed: {e}")
+        await message.answer("📍 Локация сохранена. Прогноз временно недоступен.")
+
+
 @router.message(F.document | F.photo)
 async def handle_file_input(message: Message, bot: Bot) -> None:
     if not _is_owner(message):
@@ -352,6 +387,29 @@ async def handle_file_input(message: Message, bot: Bot) -> None:
         # Bank statement PDF → parse and import instead of uploading to Drive
         if _is_bank_statement(file_name, mime_type, tmp_path):
             await _handle_bank_statement(message, bot, tmp_path, file_name)
+            return
+
+        # PDF or DOCX → pass to agent via parse_document tool
+        _PARSEABLE = ("application/pdf",
+                      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                      "text/plain", "text/markdown", "text/csv")
+        if mime_type in _PARSEABLE or Path(file_name).suffix.lower() in (".pdf", ".docx", ".txt", ".md", ".csv"):
+            # Save to persistent tmp location so agent can read it
+            tmp_dir = Path.home() / ".sba" / "tmp"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            saved_path = tmp_dir / file_name
+            tmp_path.rename(saved_path)
+            caption = message.caption.strip() if message.caption else ""
+            task_hint = f"\nЗадача от пользователя: {caption}" if caption else ""
+            agent_msg = (
+                f"Пользователь прислал документ: {file_name}\n"
+                f"Файл сохранён: {saved_path}{task_hint}\n"
+                f"Прочитай его через parse_document и обработай: если нет конкретной задачи — "
+                f"кратко изложи содержимое и предложи сохранить как заметку."
+            )
+            status_msg = await message.answer("📄 Читаю документ...")
+            await _run_agent(message, agent_msg, status_msg)
+            saved_path.unlink(missing_ok=True)
             return
 
         try:
