@@ -142,7 +142,7 @@ cd ~/Desktop/second-brain-agent-v2
 - `finance_list_recurring` — список регулярных платежей
 - `get_youtube_transcript` — транскрипт YouTube-видео + трансформация: summary (по умолч.), chapters, thread, blog, quotes. Параметры: `video_url`, `format`, `language`
 - `parse_document` — извлечь текст из PDF/DOCX/TXT/MD/CSV через pymupdf (fitz) с pdfminer fallback. Параметры: `file_path`, `max_chars` (default 15000)
-- `get_weather` — прогноз погоды через wttr.in (без API-ключа). Читает `~/.sba/last_location.json` если есть, иначе `digest.location` из config. Параметры: `location` (опц.), `day` (today/tomorrow)
+- `get_weather` — прогноз погоды через wttr.in (без API-ключа). Читает `~/.sba/last_location.json` если есть, иначе `digest.location` из config. Параметры: `location` (опц.), `day` (today/tomorrow). Название города: если строка ("Astana") — используется напрямую; если GPS-координаты — берётся `nearest_area` из API (wttr.in возвращает районы типа "Zaozernuy" для строки)
 
 ### Псевдонимы счетов (finance.py)
 ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "second" → account_2; "бизнес", "business" → account_biz. Настраиваются под свои банки.
