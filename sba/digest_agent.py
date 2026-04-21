@@ -333,12 +333,30 @@ async def _prefetch_data(config: dict, hours_back: int = 16) -> tuple[str, str, 
 
     # --- Telegram posts (with 90s global timeout) ---
     posts_text = "Посты из каналов недоступны."
+    _auth_error = False
     try:
         posts_text = await asyncio.wait_for(_fetch_posts(config, hours_back), timeout=90)
     except asyncio.TimeoutError:
         logger.warning("Telegram posts fetch timed out after 90s")
     except Exception as e:
-        logger.error(f"Failed to pre-fetch Telegram posts: {e}", exc_info=True)
+        err_str = str(e)
+        if "AuthKey" in err_str or "key is not registered" in err_str.lower():
+            _auth_error = True
+            posts_text = "⚠️ Telegram-сессия истекла — требуется переавторизация."
+            logger.error(f"Telethon auth expired: {e}")
+        else:
+            logger.error(f"Failed to pre-fetch Telegram posts: {e}", exc_info=True)
+
+    # Notify about auth error separately (before agent call)
+    if _auth_error and _notifier:
+        try:
+            await _notifier.send_message(
+                "⚠️ <b>Telegram userbot: сессия истекла</b>\n\n"
+                "Дайджест отправлен без постов из каналов.\n"
+                "Для восстановления: <code>CLAUDECODE=\"\" .venv/bin/sba auth-userbot</code>"
+            )
+        except Exception:
+            pass
 
     # --- Google Tasks ---
     tasks_text = "Задач на сегодня нет."

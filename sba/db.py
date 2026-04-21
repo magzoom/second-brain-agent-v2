@@ -964,7 +964,11 @@ class Database:
             rows = [dict(r) for r in await cur.fetchall()]
 
         # Build keyword list from label (words with len > 3, skip generic finance words)
-        _GENERIC_WORDS = {"банк", "bank", "депозит", "deposit", "платёж", "payment", "оплата"}
+        # "kaspi" excluded — too generic, matches unrelated transactions like TOO KASPI MAGAZIN
+        _GENERIC_WORDS = {
+            "банк", "bank", "депозит", "deposit", "платёж", "payment", "оплата",
+            "kaspi", "каспи", "кредит", "credit",
+        }
         keywords = [
             w.lower() for w in label.split()
             if len(w) > 3 and w.lower() not in _GENERIC_WORDS
@@ -973,7 +977,7 @@ class Database:
         matches = []
         for tx in rows:
             # Only look at expenses — ignore transfers between own accounts
-            if tx.get("tx_type") == "transfer":
+            if tx.get("tx_type") in ("transfer", "transfer_in", "transfer_out"):
                 continue
 
             desc = (tx.get("description") or "").lower()

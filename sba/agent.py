@@ -577,15 +577,15 @@ async def _finance_get_transactions_tool(args: dict) -> dict:
     return _ok("\n".join(lines))
 
 
-@tool("finance_manage_recurring", "Добавить или удалить регулярное финансовое напоминание.", {
+@tool("finance_manage_recurring", "Добавить, удалить или пометить оплаченным регулярный платёж.", {
     "type": "object",
     "properties": {
-        "action":       {"type": "string",  "description": "add или delete"},
+        "action":       {"type": "string",  "description": "add, delete или mark_paid"},
         "label":        {"type": "string",  "description": "Описание: 'Коммуналка', 'Google AI Pro', 'Садака', 'Школа'"},
         "day_of_month": {"type": "integer", "description": "День месяца 1-31. 0 = ежедневно"},
         "amount":       {"type": "number",  "description": "Сумма в тенге (опционально)"},
         "remind_days_before": {"type": "integer", "description": "За сколько дней до срока напоминать (default 0)", "default": 0},
-        "item_id":      {"type": "integer", "description": "ID записи для удаления (только для action=delete)"},
+        "item_id":      {"type": "integer", "description": "ID записи (для action=delete или mark_paid)"},
     },
     "required": ["action"],
 })
@@ -599,6 +599,14 @@ async def _finance_manage_recurring_tool(args: dict) -> dict:
             return _ok("Укажи ID записи для удаления")
         await _db.fin_delete_recurring(int(item_id))
         return _ok(f"Напоминание #{item_id} отключено")
+    elif action == "mark_paid":
+        item_id = args.get("item_id")
+        if not item_id:
+            return _ok("Укажи item_id платежа. Сначала вызови finance_list_recurring(mode='all') чтобы найти ID.")
+        from datetime import date
+        month_str = date.today().strftime("%Y-%m")
+        await _db.fin_mark_recurring_paid(int(item_id), month_str)
+        return _ok(f"Платёж #{item_id} отмечен как оплаченный в {month_str}.")
     else:
         label = args.get("label", "")
         day = int(args.get("day_of_month", 0))
@@ -1276,9 +1284,11 @@ Claude Code исправит инструмент автоматически и 
 - "закят", "зякат" → finance_get_zakat
 - "итоги месяца", "сводка", "расходы за месяц" → finance_get_summary (переводы между счетами исключаются из сводки автоматически)
 - "последние транзакции", "последние расходы", "что было по счёту", "с чего продолжить", "какая последняя транзакция" → finance_get_transactions
-- "предстоящие платежи", "ближайшие платежи", "что платить", "какие платежи" → finance_list_recurring(mode=upcoming)
+- "предстоящие платежи", "ближайшие платежи", "что платить", "какие платежи", "что осталось оплатить", "учитывая что я оплатил" → finance_list_recurring(mode=upcoming) — ВСЕГДА вызывать заново, не отвечать по памяти разговора
 - "регулярные платежи", "мои подписки", "список напоминаний" → finance_list_recurring(mode=all)
 - ВСЕГДА вызывать инструмент, не отвечать по памяти
+- "я оплатил [платёж X]", "оплатил импланты", "заплатил коммуналку", "рассрочка оплачена" → НЕМЕДЛЕННО вызови finance_list_recurring(mode=all) чтобы найти item_id, затем finance_manage_recurring(action=mark_paid, item_id=X) для КАЖДОГО упомянутого платежа. Не спрашивай подтверждения.
+- При любом вопросе о деньгах — СНАЧАЛА вызови инструмент, потом отвечай. Никогда не используй данные из предыдущих сообщений разговора для финансовых ответов.
 
 Маппинг счетов (используй эти имена в инструментах):
   основной / main / каспи основной → account_main  (Kaspi основной — основной расчётный)

@@ -205,6 +205,44 @@ def auth() -> None:
     """Authentication commands."""
 
 
+@auth.command("userbot")
+def auth_userbot() -> None:
+    """Re-authorize Telegram userbot (Telethon session). Interactive — requires phone + code."""
+    config = _load_config()
+    api_id = config.get("telegram_userbot", {}).get("api_id", 0)
+    api_hash = config.get("telegram_userbot", {}).get("api_hash", "")
+    if not api_id or not api_hash:
+        click.echo("❌ telegram_userbot.api_id / api_hash not set in config.yaml", err=True)
+        sys.exit(1)
+
+    session_path = str(Path.home() / ".sba" / "telegram_userbot")
+    # Remove old session file if exists
+    for ext in ("", ".session"):
+        p = Path(session_path + ext)
+        if p.exists():
+            p.unlink()
+            click.echo(f"Removed old session: {p}")
+
+    click.echo("Starting Telethon authorization...")
+    import asyncio
+
+    async def _auth():
+        from telethon import TelegramClient
+        client = TelegramClient(session_path, api_id, api_hash)
+        await client.start()
+        me = await client.get_me()
+        click.echo(f"✅ Authorized as {me.first_name} ({me.username or me.id})")
+        await client.disconnect()
+
+    try:
+        asyncio.run(_auth())
+        from sba.notifier import notify_sync
+        notify_sync(config, "✅ <b>Telegram userbot переавторизован.</b>\nДайджест снова будет включать посты из каналов.")
+    except Exception as e:
+        click.echo(f"❌ Auth failed: {e}", err=True)
+        sys.exit(1)
+
+
 @auth.command("google")
 def auth_google() -> None:
     """Re-authorize Google OAuth2 (Drive + Tasks). Opens browser."""
