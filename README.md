@@ -53,7 +53,8 @@ You (Telegram)  ──▶  Main Agent (Claude)
 
 **Every day at 09:15** → Digest Agent sends a briefing:
 - Tasks due today from Google Tasks
-- Top posts from your Telegram channels (via Telethon)
+- Current weather from wttr.in (GPS location or default city)
+- Top posts from your Telegram channels (via Telethon, up to 35 posts from 24+ channels)
 - Categorized news: geopolitics, AI, local news, humor, health
 
 **Quarterly (Jan/Apr/Jul/Oct 1st at 09:30)** → Finance report:
@@ -106,7 +107,12 @@ No commands needed — just plain text:
 | `find my notes about the project` | Full-text search across Google Drive + Apple Notes |
 | `research the topic of AI in healthcare` | Launches Research Agent: web search + personal base |
 | `save this link` | Creates a note in Apple Notes |
-| *(forward a PDF/TXT bank statement)* | Parses transactions with Claude Haiku, shows preview with confirm/cancel |
+| *(forward a PDF/TXT bank statement)* | Parses transactions with Claude Haiku, shows preview with confirm/cancel. Transfers between own accounts detected via "С Карт X" / "На Карт X" patterns |
+| *(forward PDF/DOCX/TXT document)* | Agent reads content via `parse_document` (pymupdf) and responds. Add caption as instruction: "translate", "summarize" |
+| *(share location)* | Saves GPS coords to `~/.sba/last_location.json`, replies with tomorrow's forecast. Used in morning digest and evening check-in |
+| `YouTube link` | Fetches transcript and formats it. Specify format: "make chapters", "write thread", "write article", "quotes" |
+| `what's the weather?` | Forecast from saved GPS location or default city (Astana) |
+| `I paid the gym` | Marks recurring payment as paid for current month (suppresses reminders until next month) |
 | *(forward any other file or photo)* | Uploads to Google Drive Inbox for processing |
 | `how much is on my accounts?` | Shows balance across all accounts |
 | `spent 5000 on gas` | Logs a transaction in the finance module |
@@ -117,6 +123,12 @@ No commands needed — just plain text:
 | `add debt John 777000` | Adds a new liability to track |
 
 Technical commands: `/status` (DB stats), `/log` (last 20 log lines)
+
+CLI commands for re-authorization:
+```bash
+.venv/bin/sba auth google       # re-authorize Google Drive + Tasks (opens browser)
+.venv/bin/sba auth userbot      # re-authorize Telegram userbot for digest channel reading
+```
 
 ---
 

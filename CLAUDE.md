@@ -138,7 +138,7 @@ cd ~/Desktop/second-brain-agent-v2
 - `finance_get_zakat` — статус закята (расчёт через Yahoo Finance GC=F + KZT=X)
 - `finance_get_summary` — сводка за период
 - `finance_get_transactions` — последние транзакции по счёту или всем счетам
-- `finance_manage_recurring` — управление регулярными платежами
+- `finance_manage_recurring` — управление регулярными платежами; action=mark_paid отмечает платёж оплаченным в текущем месяце (не трогает балансы — только флаг)
 - `finance_list_recurring` — список регулярных платежей
 - `get_youtube_transcript` — транскрипт YouTube-видео + трансформация: summary (по умолч.), chapters, thread, blog, quotes. Параметры: `video_url`, `format`, `language`
 - `parse_document` — извлечь текст из PDF/DOCX/TXT/MD/CSV через pymupdf (fitz) с pdfminer fallback. Параметры: `file_path`, `max_chars` (default 15000)
@@ -215,7 +215,7 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — точное совпадение по 4 полям + нечёткое по описанию (substring match при совпадении остальных трёх)
 - `fin_get_today_transactions(today_str)` → `list` — все транзакции за дату
 - `fin_get_upcoming_recurring(today_day, days_in_month, current_month=None)` → `list` — платежи после сегодня до конца месяца; если передан current_month — скипает оплаченные (paid_month)
-- `fin_find_matching_transactions(label, amount, month_str, strict=True)` → `list` — ищет expense-транзакции за месяц по совпадению; strict=True: AND(сумма±2%, ключевые слова); strict=False: только ключевые слова (для прошедших платежей с курсовой разницей). Переводы (tx_type=transfer) исключаются. Игнорирует короткие/общие слова: банк, bank, депозит, deposit, платёж, payment, оплата
+- `fin_find_matching_transactions(label, amount, month_str, strict=True)` → `list` — ищет expense-транзакции за месяц по совпадению; strict=True: AND(сумма±2%, ключевые слова); strict=False: только ключевые слова (для прошедших платежей с курсовой разницей). Переводы (tx_type IN transfer/transfer_in/transfer_out) исключаются. Игнорирует короткие/общие слова: банк, bank, депозит, deposit, платёж, payment, оплата, kaspi, каспи, кредит, credit
 - `fin_get_recurring_by_id(id)` → `dict|None` — одна запись по id
 - `fin_mark_recurring_paid(id, month_str)` — выставить paid_month; сбрасывается автоматически в новом месяце
 - `fin_get_avg_variable_spend(excluded_categories: set)` → `float` — среднемесячные переменные расходы (last 2 months)
@@ -243,6 +243,7 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - Определение счёта: по имени файла → по содержимому PDF (`_detect_account_from_content`)
 - Карты/IBAN привязаны к счетам в промпте Haiku → генерирует ОБЕ стороны переводов на РАЗНЫЕ счета
   - Реквизиты хранятся в `~/.sba/config.yaml` → `finance.account_cards` (не в коде)
+- Направление переводов: 'С Карт X' = деньги пришли С X НА счёт выписки (X: transfer_out, счёт выписки: transfer_in). 'На Карт X' = наоборот. Явно описано в промпте с двумя примерами.
 - `_pending_statements: dict[chat_id, list]` — временное хранение до подтверждения; сбрасывается при перезапуске бота
 
 ## Security (sba/security.py)
