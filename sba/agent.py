@@ -1059,7 +1059,8 @@ async def _get_weather_tool(args: dict) -> dict:
         cur = data["current_condition"][0]
         desc = (fc["hourly"][4].get("weatherDesc") or [{}])[0].get("value", "")
         t_min, t_max = fc["mintempC"], fc["maxtempC"]
-        area = data.get("nearest_area", [{}])[0].get("areaName", [{}])[0].get("value", location)
+        # Use user-supplied location name instead of wttr.in nearest_area (can return obscure district names)
+        area = location if not ("," in str(location)) else data.get("nearest_area", [{}])[0].get("areaName", [{}])[0].get("value", "")
         label = "Сегодня" if day == "today" else "Завтра"
         extra = ""
         if day == "today":
