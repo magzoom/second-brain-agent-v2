@@ -217,17 +217,7 @@ Required Google API scopes (enabled in Cloud Console):
 ### 4. Authorize Telegram userbot (for digest channel reading)
 
 ```bash
-.venv/bin/python -c "
-from telethon.sync import TelegramClient
-from pathlib import Path
-import yaml
-config = yaml.safe_load(open(Path.home() / '.sba/config.yaml'))
-ub = config['telegram_userbot']
-client = TelegramClient(str(Path.home() / '.sba/telegram_userbot'), ub['api_id'], ub['api_hash'])
-client.start()
-client.disconnect()
-print('Done')
-"
+.venv/bin/sba auth userbot    # interactive: enter phone + Telegram code
 ```
 
 ### 5. Allow macOS permissions
@@ -264,7 +254,8 @@ Expected output:
 ```bash
 .venv/bin/sba check               # check all integrations
 .venv/bin/sba status              # database statistics
-.venv/bin/sba auth google         # re-authorize Google OAuth2
+.venv/bin/sba auth google         # re-authorize Google OAuth2 (opens browser)
+.venv/bin/sba auth userbot        # re-authorize Telegram userbot (interactive)
 
 .venv/bin/sba inbox               # run inbox processor manually
 .venv/bin/sba legacy              # run legacy processor manually
