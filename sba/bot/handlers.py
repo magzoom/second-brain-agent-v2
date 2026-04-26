@@ -478,9 +478,11 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
             f"Извлеки все транзакции из этой банковской выписки.{account_hint}\n"
             f"Счета: {accounts_info}\n\n"
             f"{card_hints}\n"
-            "Верни ТОЛЬКО JSON массив без пояснений:\n"
-            '[{"tx_date":"2026-04-01","amount":5000.0,"tx_type":"expense",'
-            '"category":"еда","description":"Название операции","account":"account_main"},...]\n\n'
+            "Верни ТОЛЬКО JSON объект без пояснений:\n"
+            '{"ending_balance": 16467.28, "transactions": ['
+            '{"tx_date":"2026-04-01","amount":5000.0,"tx_type":"expense",'
+            '"category":"еда","description":"Название операции","account":"account_main"}]}\n\n'
+            "ending_balance: null (не используется — баланс считается из транзакций).\n\n"
             "Правила:\n"
             "- tx_type: expense (расход), income (доход), transfer_out (перевод С этого счёта), transfer_in (перевод НА этот счёт)\n"
             "- Переводы между своими счетами (перечислены выше): генерируй ДВЕ РАЗНЫЕ записи:\n"
@@ -499,6 +501,9 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
             "    {account: account_main, tx_type: transfer_out, amount: 10000} +\n"
             "    {account: account_2, tx_type: transfer_in, amount: 10000}\n"
             "- Зарплата/поступления извне → income\n"
+            "- Если в строке 'Сумма операции' = 0, но есть ненулевое значение в колонке 'Комиссия' — "
+            "это банковская комиссия: tx_type=expense, amount=абсолютное значение комиссии\n"
+            "- Не создавай записи с amount=0\n"
             "- amount: всегда положительное число\n"
             "- Категории: еда, транспорт, кафе, коммуналка, интернет, подписки, "
             "здоровье, красота, одежда, развлечения, сбережения, кредиты, налоги, "
@@ -533,12 +538,20 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
                 raw = raw[4:]
         raw = raw.strip()
 
-        transactions = json.loads(raw)
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            transactions = parsed.get("transactions", [])
+            ending_balance = parsed.get("ending_balance")
+        else:
+            # fallback: старый формат — просто массив
+            transactions = parsed
+            ending_balance = None
+
         if not transactions:
             await status_msg.edit_text("❌ Транзакции не найдены в файле")
             return
 
-        _pending_statements[message.chat.id] = transactions
+        _pending_statements[message.chat.id] = (transactions, ending_balance)
 
         total_exp = sum(t["amount"] for t in transactions if t["tx_type"] == "expense")
         total_inc = sum(t["amount"] for t in transactions if t["tx_type"] == "income")
@@ -586,10 +599,11 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
         return
     await callback.answer()
     chat_id = callback.from_user.id
-    transactions = _pending_statements.pop(chat_id, None)
-    if not transactions:
-        await callback.message.edit_text("⚠️ Данные устарели — отправь выписку заново")
+    pending = _pending_statements.pop(chat_id, None)
+    if not pending:
+        await callback.message.edit_text("⚠️ Сессия сброшена (перезапуск бота) — отправь выписку ещё раз")
         return
+    transactions, ending_balance = pending if isinstance(pending, tuple) else (pending, None)
     try:
         await callback.message.edit_text("⏳ Импортирую...")
         from sba.db import Database, get_db_path
@@ -635,7 +649,8 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
         for r in rows:
             if r["name"] in affected_accounts:
                 label = _ACCOUNT_LABELS.get(r["name"], r["name"])
-                balance_lines.append(f"  {label}: {r['balance']:,.0f} ₸")
+                marker = ""
+                balance_lines.append(f"  {label}: {r['balance']:,.0f} ₸{marker}")
         balance_block = "\n".join(balance_lines)
         await callback.message.edit_text(
             f"✅ Импортировано {inserted} операций{skip_note}.\n\n"

@@ -212,7 +212,8 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 ## DB — finance методы (db.py)
 
 - `fin_add_transaction(account, amount, tx_type, category, description, tx_date)` — добавить транзакцию
-- `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — точное совпадение по 4 полям + нечёткое по описанию (substring match при совпадении остальных трёх)
+- `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — 3 уровня дедупликации: (1) точное совпадение по 4 полям, (2) нечёткое: одно описание содержит другое при совпадении суммы/даты/счёта, (3) same-amount: совпадение account+date+amount при любом описании (исключает переводы); предотвращает дубль «ручная запись + выписка»
+- `fin_set_balance_direct(account_name, new_balance)` — прямое обновление баланса БЕЗ транзакции корректировки (+ снапшот); используется при импорте выписок вместо `fin_update_balance`
 - `fin_get_today_transactions(today_str)` → `list` — все транзакции за дату
 - `fin_get_upcoming_recurring(today_day, days_in_month, current_month=None)` → `list` — платежи после сегодня до конца месяца; если передан current_month — скипает оплаченные (paid_month)
 - `fin_find_matching_transactions(label, amount, month_str, strict=True)` → `list` — ищет expense-транзакции за месяц по совпадению; strict=True: AND(сумма±2%, ключевые слова); strict=False: только ключевые слова (для прошедших платежей с курсовой разницей). Переводы (tx_type IN transfer/transfer_in/transfer_out) исключаются. Игнорирует короткие/общие слова: банк, bank, депозит, deposit, платёж, payment, оплата, kaspi, каспи, кредит, credit
@@ -239,12 +240,14 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - Парсинг через Claude Haiku API (~$0.02/файл, только при ручной отправке)
 - Показывает превью с кнопками `✅ Импортировать / ❌ Отмена`
 - После импорта: показывает актуальные балансы затронутых счетов (не подсказку)
-- Дубли: точное совпадение (account, tx_date, amount, description) ИЛИ нечёткое (одно описание содержит другое при совпадении суммы/даты/счёта)
+- Дубли: 3 уровня — (1) точное совпадение (account, tx_date, amount, description), (2) нечёткое (одно описание содержит другое при совпадении суммы/даты/счёта), (3) same-amount (совпадение account+date+amount при любом описании, кроме переводов)
+- Баланс: после импорта НЕ обновляется автоматически — только транзакции; `fin_set_balance_direct` используется только по явному запросу
+- Halyk commissions: если в строке «Сумма операции» = 0, но есть ненулевое «Комиссия» — это комиссия банка: tx_type=expense, amount=значение комиссии. Строки с amount=0 не создаются.
 - Определение счёта: по имени файла → по содержимому PDF (`_detect_account_from_content`)
 - Карты/IBAN привязаны к счетам в промпте Haiku → генерирует ОБЕ стороны переводов на РАЗНЫЕ счета
   - Реквизиты хранятся в `~/.sba/config.yaml` → `finance.account_cards` (не в коде)
 - Направление переводов: 'С Карт X' = деньги пришли С X НА счёт выписки (X: transfer_out, счёт выписки: transfer_in). 'На Карт X' = наоборот. Явно описано в промпте с двумя примерами.
-- `_pending_statements: dict[chat_id, list]` — временное хранение до подтверждения; сбрасывается при перезапуске бота
+- `_pending_statements: dict[chat_id, tuple[list, float|None]]` — хранит (транзакции, ending_balance); сбрасывается при перезапуске; «Данные устарели» → «Сессия сброшена (перезапуск бота)»
 
 ## Security (sba/security.py)
 
@@ -271,6 +274,7 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - `asyncio.to_thread()` для всех блокирующих Apple/Drive вызовов
 - Google Drive таймаут: `httplib2.Http(timeout=60)` в `get_file_content()`
 - fcntl lock: `LOCK_EX | LOCK_NB` — OS auto-release при краше
+- Telethon session версии: Telethon 1.42.0 ожидает схему v7 (5 колонок без `tmp_auth_key`); если сессия v8 (6 колонок) — ValueError "too many values to unpack". Фикс: пересоздать таблицу sessions без `tmp_auth_key`, установить version=7 через Python+sqlite3
 - Goal Tracker: JXA batch reads → Haiku трансформирует → постит в канал
 - FTS5: `tokenize='unicode61'` для русского текста
 - Digest: MAX_POSTS=35, MAX_PER_CHANNEL=2, msg.text[:120], max_turns=3, parse_mode=HTML (не markdown); fallback отправляет msg.result если send_digest не был вызван; окно Telegram-постов 16ч; показываются ВСЕ задачи на сегодня + просроченные, ⚠️ если due < today

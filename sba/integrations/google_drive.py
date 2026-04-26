@@ -43,15 +43,22 @@ def build_service(config: dict):
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            for attempt in range(3):
+            delays = [5, 10, 20, 30]  # wait up to ~65s total — covers Mac wake-up DNS delay
+            last_exc = None
+            for attempt, delay in enumerate(delays):
                 try:
                     creds.refresh(Request())
+                    last_exc = None
                     break
                 except Exception as e:
-                    if attempt == 2:
+                    # invalid_grant means the refresh token itself is revoked — no point retrying
+                    if "invalid_grant" in str(e):
                         raise
-                    logger.warning(f"Token refresh attempt {attempt + 1} failed: {e}, retrying...")
-                    time.sleep(2 ** attempt)
+                    last_exc = e
+                    logger.warning(f"Token refresh attempt {attempt + 1} failed: {e}, retrying in {delay}s...")
+                    time.sleep(delay)
+            if last_exc:
+                raise last_exc
         else:
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_file), SCOPES)
             creds = flow.run_local_server(port=8085, access_type="offline", prompt="consent")

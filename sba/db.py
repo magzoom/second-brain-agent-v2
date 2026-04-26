@@ -699,6 +699,15 @@ class Database:
         # Auto-save snapshot when user explicitly reports balance
         await self.fin_save_snapshot(account_name, new_balance, source="user")
 
+    async def fin_set_balance_direct(self, account_name: str, new_balance: float) -> None:
+        """Set account balance directly without creating a correction transaction. Use for statement imports."""
+        await self._conn.execute(
+            "UPDATE fin_accounts SET balance=?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+            (new_balance, account_name),
+        )
+        await self._conn.commit()
+        await self.fin_save_snapshot(account_name, new_balance, source="statement")
+
     async def fin_save_snapshot(self, account: str, balance: float, snapshot_date: str = "", source: str = "auto") -> None:
         """Save (or update) daily balance snapshot for an account."""
         from datetime import date as _date
@@ -1056,6 +1065,18 @@ class Database:
                 existing = (row[0] or "").lower().strip()
                 if existing and (desc_lower in existing or existing in desc_lower):
                     return True
+        # Same-amount match: if same account/date/amount already exists (manual entry vs statement),
+        # treat as duplicate regardless of description to prevent double-counting.
+        # Excludes transfers (they can legitimately have two legs with the same amount).
+        async with self._conn.execute(
+            """SELECT 1 FROM fin_transactions
+               WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01
+               AND tx_type NOT IN ('transfer','transfer_in','transfer_out')
+               LIMIT 1""",
+            (account, tx_date, amount),
+        ) as cur:
+            if await cur.fetchone():
+                return True
         return False
 
     async def fin_get_today_transactions(self, today_str: str) -> list:
