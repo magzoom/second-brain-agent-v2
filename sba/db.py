@@ -55,6 +55,16 @@ def _create_tables(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_fin_recurring_active
             ON fin_recurring(is_active, day_of_month);
     """)
+    # Cleanup: drop dead tables and columns from v1/early v2
+    conn.executescript("""
+        DROP TABLE IF EXISTS processing_queue;
+        DROP TABLE IF EXISTS actionable_items;
+    """)
+    try:
+        conn.execute("ALTER TABLE knowledge_graph DROP COLUMN embedding")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # already removed
     # Column migration: task_id (may already exist on upgraded DBs)
     try:
         conn.execute("ALTER TABLE goal_tracker_posts ADD COLUMN task_id TEXT")
@@ -98,17 +108,6 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             UNIQUE(source, source_id)
         );
 
-        CREATE TABLE IF NOT EXISTS processing_queue (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_id         INTEGER NOT NULL REFERENCES files_registry(id),
-            priority        INTEGER DEFAULT 2,
-            status          TEXT DEFAULT 'pending',
-            attempts        INTEGER DEFAULT 0,
-            error_log       TEXT,
-            scheduled_for   DATE DEFAULT (date('now')),
-            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-
         CREATE TABLE IF NOT EXISTS pending_deletions (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             file_id         INTEGER NOT NULL REFERENCES files_registry(id),
@@ -125,18 +124,7 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             category        TEXT,
             tags            TEXT,
             summary         TEXT,
-            embedding       BLOB,
             created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS actionable_items (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            file_id         INTEGER NOT NULL REFERENCES files_registry(id),
-            reminder_id     TEXT,
-            calendar_event_id TEXT,
-            status          TEXT DEFAULT 'created',
-            created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-            completed_at    DATETIME
         );
 
         CREATE TABLE IF NOT EXISTS gdrive_sync_state (
@@ -572,19 +560,10 @@ class Database:
 
     # ── knowledge_graph ───────────────────────────────────────────────────────
 
-    async def add_knowledge(self, file_id: int, category: str, tags: str, summary: str, embedding: bytes = None) -> None:
+    async def add_knowledge(self, file_id: int, category: str, tags: str, summary: str) -> None:
         await self._conn.execute(
-            "INSERT OR REPLACE INTO knowledge_graph (file_id, category, tags, summary, embedding) VALUES (?, ?, ?, ?, ?)",
-            (file_id, category, tags, summary, embedding),
-        )
-        await self._conn.commit()
-
-    # ── actionable_items ──────────────────────────────────────────────────────
-
-    async def add_actionable(self, file_id: int, reminder_id: str = None, calendar_event_id: str = None) -> None:
-        await self._conn.execute(
-            "INSERT INTO actionable_items (file_id, reminder_id, calendar_event_id) VALUES (?, ?, ?)",
-            (file_id, reminder_id, calendar_event_id),
+            "INSERT OR REPLACE INTO knowledge_graph (file_id, category, tags, summary) VALUES (?, ?, ?, ?)",
+            (file_id, category, tags, summary),
         )
         await self._conn.commit()
 
@@ -1215,11 +1194,5 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
         stats["pending_deletions"] = row["cnt"] if row else 0
-
-        async with self._conn.execute(
-            "SELECT COUNT(*) as cnt FROM processing_queue WHERE status='pending'"
-        ) as cur:
-            row = await cur.fetchone()
-        stats["queue_pending"] = row["cnt"] if row else 0
 
         return stats
