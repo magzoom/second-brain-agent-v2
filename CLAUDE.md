@@ -34,13 +34,14 @@
 - `sba/digest_agent.py` — Digest Agent (утренний брифинг, независимый)
 - Research Agent — subagent внутри agent.py (AgentDefinition, WebSearch + FTS5)
 
-**6 демонов (launchd):**
+**7 демонов (launchd):**
 - `com.sba.bot` — Telegram long polling, KeepAlive + ThrottleInterval=30
 - `com.sba.inbox` — 5 запусков в день: **08:00, 12:00, 15:00, 18:00, 21:00** (StartCalendarInterval, не cron)
 - `com.sba.legacy` — **09:00**, обработка накопленного + Goal Tracker (первым)
 - `com.sba.digest` — **09:15**, утренний брифинг (после legacy, читает актуальные задачи)
 - `com.sba.finance` — **1 янв/апр/июл/окт в 09:30**, квартальный финансовый отчёт + закят
 - `com.sba.fin_remind` — **08:00** (напоминания + снапшот) + **21:00** (вечерний чек-ин); **воскресенье 21:00** — дополнительно недельный прогноз
+- `com.sba.dev` — **WatchPaths** на `~/.sba/dev_request.json`; запускается автоматически когда агент вызывает `request_capability_development`; запускает Claude Code CLI для написания нового инструмента в `agent.py`; после этого бот перезапускается и выполняет исходный запрос
 
 ## Ключевые файлы
 
