@@ -10,6 +10,7 @@ import time
 from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -97,9 +98,10 @@ def _get_or_create_list(service, name: str) -> str:
     return new_list["id"]
 
 
-def _to_rfc3339_utc(date_str: str, time_str: str = "09:00") -> str:
-    """Convert YYYY-MM-DD HH:MM (local time) to RFC 3339 UTC string."""
-    dt_local = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M").astimezone()
+def _to_rfc3339_utc(date_str: str, time_str: str = "09:00", tz_name: str = "Asia/Almaty") -> str:
+    """Convert YYYY-MM-DD HH:MM (config timezone) to RFC 3339 UTC string."""
+    tz = ZoneInfo(tz_name)
+    dt_local = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=tz)
     return dt_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
@@ -136,9 +138,10 @@ def create_task(
         return None
 
 
-def get_tasks_today(service) -> list[dict]:
+def get_tasks_today(service, tz_name: str = "Asia/Almaty") -> list[dict]:
     """Return incomplete tasks due today or overdue (all lists)."""
-    end_dt = datetime.now().replace(hour=23, minute=59, second=59).astimezone(timezone.utc)
+    tz = ZoneInfo(tz_name)
+    end_dt = datetime.now(tz).replace(hour=23, minute=59, second=59).astimezone(timezone.utc)
     end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     result = service.tasklists().list(maxResults=100).execute()
@@ -164,9 +167,10 @@ def get_tasks_today(service) -> list[dict]:
     return items
 
 
-def get_tasks_upcoming(service, days: int = 7) -> list[dict]:
+def get_tasks_upcoming(service, days: int = 7, tz_name: str = "Asia/Almaty") -> list[dict]:
     """Return incomplete tasks due in the next N days (all lists)."""
-    end_date = (date.today() + timedelta(days=days)).isoformat()
+    tz = ZoneInfo(tz_name)
+    end_date = (datetime.now(tz).date() + timedelta(days=days)).isoformat()
     end_str = f"{end_date}T23:59:59.000Z"
 
     result = service.tasklists().list(maxResults=100).execute()
@@ -192,13 +196,14 @@ def get_tasks_upcoming(service, days: int = 7) -> list[dict]:
     return items
 
 
-def rollover_overdue_tasks(service) -> int:
+def rollover_overdue_tasks(service, tz_name: str = "Asia/Almaty") -> int:
     """Move all overdue incomplete tasks to today. Returns count of updated tasks."""
-    from datetime import date as _date, timedelta as _timedelta
-    yesterday_str = (_date.today() - _timedelta(days=1)).isoformat()
+    from datetime import timedelta as _timedelta
+    today_local = datetime.now(ZoneInfo(tz_name)).date()
+    yesterday_str = (today_local - _timedelta(days=1)).isoformat()
     # dueMax = yesterday means strictly overdue (before today)
     cutoff = f"{yesterday_str}T23:59:59.000Z"
-    new_due = _date.today().strftime("%Y-%m-%dT09:00:00.000Z")
+    new_due = today_local.strftime("%Y-%m-%dT09:00:00.000Z")
 
     result = service.tasklists().list(maxResults=100).execute()
     updated = 0

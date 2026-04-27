@@ -129,7 +129,8 @@ async def _get_todays_reminders_and_events_tool(args: dict[str, Any]) -> dict[st
     from sba.integrations import google_tasks
     try:
         service = await asyncio.to_thread(google_tasks.build_service, _config)
-        tasks = await asyncio.to_thread(google_tasks.get_tasks_today, service)
+        tz_name = _config.get("timezone", "Asia/Almaty")
+        tasks = await asyncio.to_thread(google_tasks.get_tasks_today, service, tz_name)
     except Exception as e:
         tasks = []
         logger.warning(f"Google Tasks unavailable: {e}")
@@ -367,7 +368,8 @@ async def _prefetch_data(config: dict, hours_back: int = 16) -> tuple[str, str, 
         from datetime import date as _date
         today = _date.today().isoformat()
         service = await asyncio.to_thread(google_tasks.build_service, config)
-        tasks = await asyncio.to_thread(google_tasks.get_tasks_today, service)
+        tz_name = config.get("timezone", "Asia/Almaty")
+        tasks = await asyncio.to_thread(google_tasks.get_tasks_today, service, tz_name)
         if tasks:
             lines = []
             for t in tasks:

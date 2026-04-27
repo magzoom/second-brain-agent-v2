@@ -132,7 +132,8 @@ async def _create_reminder_tool(args: dict[str, Any]) -> dict[str, Any]:
 async def _get_reminders_today_tool(args: dict[str, Any]) -> dict[str, Any]:
     try:
         service = await asyncio.to_thread(google_tasks.build_service, _config)
-        tasks = await asyncio.to_thread(google_tasks.get_tasks_today, service)
+        tz_name = _config.get("timezone", "Asia/Almaty")
+        tasks = await asyncio.to_thread(google_tasks.get_tasks_today, service, tz_name)
     except Exception as e:
         return _ok(f"Ошибка получения задач: {e}")
     if not tasks:
@@ -150,7 +151,8 @@ async def _get_reminders_upcoming_tool(args: dict[str, Any]) -> dict[str, Any]:
     days = int(args.get("days", 7))
     try:
         service = await asyncio.to_thread(google_tasks.build_service, _config)
-        tasks = await asyncio.to_thread(google_tasks.get_tasks_upcoming, service, days)
+        tz_name = _config.get("timezone", "Asia/Almaty")
+        tasks = await asyncio.to_thread(google_tasks.get_tasks_upcoming, service, days, tz_name)
     except Exception as e:
         return _ok(f"Ошибка получения задач: {e}")
     if not tasks:

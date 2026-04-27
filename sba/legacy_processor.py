@@ -109,7 +109,8 @@ async def _rollover_overdue_tasks(config: dict) -> None:
     """Move overdue incomplete Google Tasks to today."""
     try:
         service = await asyncio.to_thread(google_tasks.build_service, config)
-        count = await asyncio.to_thread(google_tasks.rollover_overdue_tasks, service)
+        tz_name = config.get("timezone", "Asia/Almaty")
+        count = await asyncio.to_thread(google_tasks.rollover_overdue_tasks, service, tz_name)
         if count:
             logger.info(f"Rolled over {count} overdue tasks to today")
     except Exception as e:
