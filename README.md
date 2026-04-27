@@ -3,7 +3,7 @@
 > A personal AI agent for macOS that runs in the background and talks to you via Telegram.
 > Send a message in plain text — it creates tasks, searches your notes, organizes files, and delivers a morning briefing every day.
 
-Built on **[Claude Agent SDK](https://github.com/anthropics/claude-code)** (Anthropic) with 3 specialized agents and 6 background daemons.
+Built on **[Claude Agent SDK](https://github.com/anthropics/claude-code)** (Anthropic) with 3 specialized agents and 7 background daemons.
 
 ---
 
@@ -54,7 +54,10 @@ You (Telegram)  ──▶  Main Agent (Claude)
 **Every day at 09:15** → Digest Agent sends a briefing:
 - Tasks due today from Google Tasks
 - Current weather from wttr.in (GPS location or default city)
-- Top posts from your Telegram channels (via Telethon, up to 35 posts from 24+ channels)
+- Top posts from your Telegram channels (via Telethon, ranked by engagement: views + forwards×5 + reactions×2)
+- No post repeats between days (SQLite deduplication, 7-day window)
+- Same story from multiple channels → only the best version shown
+- Ad/noise posts filtered before reaching Claude
 - Categorized news: geopolitics, AI, local news, humor, health
 
 **Quarterly (Jan/Apr/Jul/Oct 1st at 09:30)** → Finance report:
@@ -74,10 +77,10 @@ You (Telegram)  ──▶  Main Agent (Claude)
 | File storage | Google Drive API (OAuth2) |
 | Notes | Apple Notes via JXA (JavaScript for Automation) |
 | Calendar | Google Calendar API (OAuth2) |
-| Messaging | Telegram Bot API (aiogram 3.x) |
+| Messaging | Telegram Bot API (aiogram 3.13.x) |
 | Telegram reader | Telethon (userbot for channel reading) |
 | Database | SQLite with FTS5 full-text search |
-| Scheduler | macOS launchd (6 background daemons) |
+| Scheduler | macOS launchd (7 background daemons) |
 | Language | Python 3.12 |
 
 ---
@@ -258,7 +261,7 @@ Expected output:
 
 .venv/bin/sba backup              # backup database
 
-.venv/bin/sba service install all      # install all 6 daemons
+.venv/bin/sba service install all      # install all 7 daemons
 .venv/bin/sba service uninstall all    # remove all daemons
 .venv/bin/sba service status           # show daemon status
 .venv/bin/sba service logs bot         # tail bot log
@@ -271,19 +274,23 @@ Expected output:
 ```
 sba/
 ├── agent.py              # Main Agent — Claude SDK orchestrator (GTD + Finance tools)
-├── digest_agent.py       # Digest Agent — morning briefing
+├── digest_agent.py       # Digest Agent — morning briefing (ranking, dedup, noise filter)
 ├── inbox_processor.py    # Inbox daemon — runs at 08:00, 12:00, 15:00, 18:00, 21:00
 ├── legacy_processor.py   # Legacy daemon — indexes archive + Goal Tracker
 ├── finance_processor.py  # Finance daemon — quarterly report (Jan/Apr/Jul/Oct 1st)
 ├── fin_remind_processor.py # Finance reminders (08:00) + evening check-in (21:00) + Sunday forecast
+├── dev_processor.py      # Dev daemon — auto-extends agent.py via Claude Code CLI
 ├── finance.py            # Zakat calc, account aliases, gold price (Yahoo Finance)
 ├── lock.py               # Shared fcntl process lock
 ├── cli.py                # CLI entry point (Click)
-├── db.py                 # SQLite + FTS5 knowledge base + fin_* tables
+├── db.py                 # SQLite + FTS5 knowledge base + fin_* + digest_seen_posts tables
 ├── notifier.py           # Telegram send helpers
+├── api_client.py         # Shared Anthropic client (singleton, connection-pool reuse)
+├── security.py           # FTS5 input scanner (prompt injection, 20+ patterns)
+├── extension_registry.py # Pending self-extension actions (agent ↔ handlers)
 ├── service_manager.py    # launchd plist generator
 ├── bot/
-│   ├── bot.py            # aiogram 3.x setup
+│   ├── bot.py            # aiogram 3.13.x setup
 │   ├── handlers.py       # message and callback handlers
 │   └── keyboards.py      # inline keyboards (deletion + folder decisions)
 └── integrations/

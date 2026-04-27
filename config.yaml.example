@@ -55,6 +55,26 @@ anthropic:
 goal_tracker:
   channel_id: -1001234567890         # ID Telegram канала для Goal Tracker Diary
 
+digest:
+  location: "Astana"                 # город по умолчанию если нет GPS (wttr.in)
+  max_posts: 35                      # максимум постов в дайджесте
+  default_channel_limit: 2          # постов с одного обычного канала
+  priority_channel_limit: 5         # постов с приоритетного канала
+  priority_channels: []             # список username-ов приоритетных каналов (без @)
+    # - durov
+    # - bbcrussian
+  noise_words:                      # слова-маркеры рекламы — такие посты фильтруются
+    - "реклама"
+    - "подписывайся"
+    - "промокод"
+    - "заказать"
+    - "жми"
+    - "подпишись"
+    - "скидка"
+    - "купить"
+  # mood: "краткий и деловой"       # опционально: стиль подачи дайджеста
+
+timezone: "Asia/Almaty"             # IANA timezone для задач и дайджеста
 
 paths:
   db: ~/.sba/sba.db
