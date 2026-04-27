@@ -87,7 +87,7 @@ def _bot_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
@@ -128,7 +128,7 @@ def _inbox_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
@@ -168,7 +168,7 @@ def _legacy_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
@@ -208,7 +208,7 @@ def _digest_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
@@ -248,7 +248,7 @@ def _finance_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
@@ -286,7 +286,7 @@ def _fin_remind_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""

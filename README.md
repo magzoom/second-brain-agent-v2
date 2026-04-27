@@ -82,16 +82,9 @@ You (Telegram)  ──▶  Main Agent (Claude)
 
 ---
 
-## Native macOS alternative
+## Native macOS
 
-By default the agent uses Google services (Tasks, Calendar, Drive). If you prefer a fully offline, native macOS stack, both Apple integration files are already included — you just need to swap the tool handlers in `agent.py`:
-
-| Google service | Apple alternative | Existing file |
-|---|---|---|
-| Google Calendar | Apple Calendar | `sba/integrations/apple_calendar.py` |
-| Google Drive | — | No native equivalent with a programmable API |
-
-Apple Notes is used regardless of which stack you choose.
+Apple Notes is used regardless of which Google services you configure. Google Calendar, Tasks and Drive are the primary integrations — there is no Apple Calendar equivalent in this project.
 
 ---
 
@@ -295,7 +288,6 @@ sba/
 │   └── keyboards.py      # inline keyboards (deletion + folder decisions)
 └── integrations/
     ├── apple_notes.py    # JXA read + AppleScript write
-    ├── apple_calendar.py # AppleScript calendar events (kept for compatibility)
     ├── google_drive.py   # Drive API (OAuth2, changes, upload, summary files)
     ├── google_tasks.py   # Tasks API (create, today, rollover)
     ├── google_calendar.py # Calendar API (OAuth2, create events)
