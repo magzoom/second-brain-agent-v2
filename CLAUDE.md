@@ -1,4 +1,28 @@
-# SBA 2.0 — Second Brain Agent
+# SBA 2.1 — Second Brain Agent
+
+## Changelog v2.1 (2026-04-27)
+
+Полный security-аудит + исправления:
+- **C: parse_document whitelist** — агент может читать только `~/.sba/tmp/`, отказ на config.yaml и любые пути вне белого списка
+- **C: Path traversal (Telegram)** — `file_name` обрезается до `Path(file_name).name` перед сохранением
+- **C: Plist XML injection** — все переменные в plist-builders экранируются через `xml.sax.saxutils.escape()`
+- **C: Dev processor task validation** — `tool_name` валидируется regex, `task` сканируется `scan_content()` перед передачей в CC; авто-git-commit удалён
+- **C: JXA escaping** — `\n`, `\r`, backtick экранируются в `_escape_applescript()`
+- **H: Атомарность fin_add_transaction** — INSERT + UPDATE баланса завёрнуты в SAVEPOINT
+- **H: Race condition confirm_deletion** — UPDATE добавлен `AND status='waiting'`
+- **H: PDF size limit** — 10 МБ лимит перед base64-кодированием
+- **H: Blocking sleep** — `wait_if_dev_active()` теперь poll 60s × 15min вместо одного sleep(1800)
+- **H: extension_registry thread-safe** — `threading.Lock` вокруг `_counter`
+- **M: SQL indexes** — добавлены индексы на `fin_transactions(account, tx_date)`, `pending_deletions(status)`, `files_registry(status, source)`
+- **M: FTS5 query sanitization** — спецсимволы FTS5 экранируются перед MATCH
+- **M: WAL-safe backup** — `shutil.copy2` заменён на `sqlite3.backup()`
+- **M: Рекурсия _scan_folder** — `_visited: set` + `_MAX_SCAN_DEPTH=20` против циклов
+- **M: URL encoding** — `location` в wttr.in URL кодируется через `urllib.parse.quote()`
+- **M: get_changes pagination guard** — `_MAX_PAGES=200` + проверка повторного токена
+- **L: Атомарная запись resume** — write-then-rename для `bot_resume.json`
+- **L: config validation** — пустой config.yaml → `sys.exit(1)` вместо молчаливой работы
+- **Security scanner** — добавлено 11 русских паттернов + jailbreak phrases в `security.py`
+- **cleanup_old_snapshots** — новый метод DB для очистки снапшотов старше 2 лет
 
 ## Архитектура
 

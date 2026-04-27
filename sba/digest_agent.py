@@ -303,7 +303,9 @@ async def _fetch_weather(config: dict) -> str:
         area_label = location
 
     try:
-        url = f"https://wttr.in/{location}?format=j1"
+        import urllib.parse as _up
+        loc_encoded = _up.quote(str(location), safe=",")
+        url = f"https://wttr.in/{loc_encoded}?format=j1"
         req = _ur.Request(url, headers={"User-Agent": "curl/7.88.1"})
         with _ur.urlopen(req, timeout=8) as resp:
             data = _json.loads(resp.read())

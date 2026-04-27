@@ -178,10 +178,11 @@ async def _send_evening_checkin(db, notifier, today: date) -> None:
     loc_file = Path.home() / ".sba" / "last_location.json"
     if loc_file.exists():
         try:
-            import json as _json, urllib.request as _ur
+            import json as _json, urllib.request as _ur, urllib.parse as _up
             loc = _json.loads(loc_file.read_text())
             lat, lon = loc["lat"], loc["lon"]
-            url = f"https://wttr.in/{lat},{lon}?format=j1"
+            loc_encoded = _up.quote(f"{lat},{lon}", safe=",")
+            url = f"https://wttr.in/{loc_encoded}?format=j1"
             req = _ur.Request(url, headers={"User-Agent": "curl/7.88.1"})
             with _ur.urlopen(req, timeout=8) as resp:
                 wdata = _json.loads(resp.read())

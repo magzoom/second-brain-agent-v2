@@ -69,7 +69,7 @@
 <div class="hero">
   <h1>🧠 Second Brain Agent</h1>
   <p>Персональный AI-агент. Говори свободным текстом — система сама разберётся.</p>
-  <div class="version">v2.0 · Claude Agent SDK · macOS</div>
+  <div class="version">v2.1 · Claude Agent SDK · macOS</div>
 </div>
 
 <div class="container">
@@ -372,10 +372,45 @@
     </table>
   </div>
 
+  <div class="section">
+    <h2><span class="icon" style="background:#fff3cd">🔒</span>Безопасность (v2.1)</h2>
+    <table>
+      <tr><th>Механизм</th><th>Защита</th></tr>
+      <tr>
+        <td>parse_document whitelist</td>
+        <td>Агент может читать файлы только из <code>~/.sba/tmp/</code>. Попытка открыть config.yaml или другие файлы → отказ с сообщением.</td>
+      </tr>
+      <tr>
+        <td>Path traversal (Telegram)</td>
+        <td>Имена файлов из Telegram обрезаются до basename: <code>../../etc/passwd</code> → <code>passwd</code>.</td>
+      </tr>
+      <tr>
+        <td>Prompt injection scanner</td>
+        <td>20+ паттернов на русском и английском в <code>security.py</code>. Срабатывает перед индексацией в FTS5.</td>
+      </tr>
+      <tr>
+        <td>Dev processor</td>
+        <td>tool_name валидируется regex, task сканируется на инъекции перед запуском CC. Авто-коммит удалён — изменения требуют ручного review.</td>
+      </tr>
+      <tr>
+        <td>Plist XML escaping</td>
+        <td>Все пути в plist-файлах экранируются через xml.sax.saxutils.escape().</td>
+      </tr>
+      <tr>
+        <td>Транзакции БД</td>
+        <td>fin_add_transaction завёрнута в SAVEPOINT — INSERT и UPDATE баланса атомарны.</td>
+      </tr>
+      <tr>
+        <td>PDF размер</td>
+        <td>Лимит 10 МБ на банковские выписки перед отправкой в API.</td>
+      </tr>
+    </table>
+  </div>
+
 </div>
 
 <footer>
-  Second Brain Agent 2.0 · Claude Agent SDK
+  Second Brain Agent v2.1 · Claude Agent SDK · Обновлён 2026-04-27
 </footer>
 
 </body>

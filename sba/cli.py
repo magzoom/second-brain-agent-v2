@@ -36,7 +36,10 @@ def _load_config() -> dict:
         click.echo(f"❌ Config not found: {config_path}", err=True)
         sys.exit(1)
     with open(config_path) as f:
-        config = yaml.safe_load(f) or {}
+        config = yaml.safe_load(f)
+    if not config:
+        click.echo(f"❌ Config is empty or invalid YAML: {config_path}", err=True)
+        sys.exit(1)
     # Warn about missing required keys
     for section, key in _REQUIRED_KEYS:
         if not config.get(section, {}).get(key):

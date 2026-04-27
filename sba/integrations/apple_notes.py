@@ -315,8 +315,13 @@ def list_folders() -> list[str]:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _escape_applescript(text: str) -> str:
+    """Escape a string for safe embedding in both AppleScript and JXA string literals."""
     text = text.replace("\\", "\\\\")
     text = text.replace('"', '\\"')
+    # Newlines in AppleScript string literals cause syntax errors
+    text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    # Backticks are safe in AppleScript but guard against JXA template-literal confusion
+    text = text.replace("`", "'")
     return text
 
 

@@ -37,7 +37,10 @@ async def _send_resume(bot: Bot, resume: dict, config: dict) -> None:
         return
     # Re-write resume file so dev_processor can read retry_count if agent triggers CC.
     # _load_resume() already deleted it — restore it for the duration of this run.
-    _RESUME_FILE.write_text(_json.dumps(resume, ensure_ascii=False), encoding="utf-8")
+    # Use atomic write-then-rename to avoid partial reads if process is killed mid-write.
+    _tmp_resume = _RESUME_FILE.with_suffix(".tmp")
+    _tmp_resume.write_text(_json.dumps(resume, ensure_ascii=False), encoding="utf-8")
+    _tmp_resume.replace(_RESUME_FILE)
     _DEV_REQUEST_FILE = _Path.home() / ".sba" / "dev_request.json"
     try:
         status = await bot.send_message(chat_id, f"↩️ Продолжаю выполнение (попытка {retry_count}):\n<i>{text[:200]}</i>")

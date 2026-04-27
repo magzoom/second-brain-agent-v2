@@ -59,14 +59,17 @@ _MAX_RESUME_RETRIES = 2
 
 
 def _save_resume(chat_id: int, message_text: str, retry_count: int = 0) -> None:
-    """Save pending resume context before bot restart."""
+    """Save pending resume context before bot restart (atomic write)."""
     import json, time
-    _RESUME_FILE.write_text(json.dumps({
+    data = json.dumps({
         "chat_id": chat_id,
         "message": message_text,
         "ts": time.time(),
         "retry_count": retry_count,
-    }), encoding="utf-8")
+    })
+    tmp = _RESUME_FILE.with_suffix(".tmp")
+    tmp.write_text(data, encoding="utf-8")
+    tmp.replace(_RESUME_FILE)
 
 
 def _load_resume() -> dict | None:
@@ -330,8 +333,9 @@ def _detect_account_from_content(text: str) -> str | None:
 
 def _fetch_tomorrow_weather_by_coords(lat: float, lon: float) -> str:
     """Fetch tomorrow's weather forecast from wttr.in by coordinates."""
-    import urllib.request, json as _json
-    url = f"https://wttr.in/{lat},{lon}?format=j1"
+    import urllib.request, urllib.parse, json as _json
+    loc_encoded = urllib.parse.quote(f"{lat},{lon}", safe=",")
+    url = f"https://wttr.in/{loc_encoded}?format=j1"
     req = urllib.request.Request(url, headers={"User-Agent": "curl/7.88.1"})
     with urllib.request.urlopen(req, timeout=8) as resp:
         data = _json.loads(resp.read())
@@ -395,14 +399,16 @@ async def handle_file_input(message: Message, bot: Bot) -> None:
                       "text/plain", "text/markdown", "text/csv")
         if mime_type in _PARSEABLE or Path(file_name).suffix.lower() in (".pdf", ".docx", ".txt", ".md", ".csv"):
             # Save to persistent tmp location so agent can read it
+            # Use only the basename to prevent path traversal attacks
+            safe_name = Path(file_name).name
             tmp_dir = Path.home() / ".sba" / "tmp"
             tmp_dir.mkdir(parents=True, exist_ok=True)
-            saved_path = tmp_dir / file_name
+            saved_path = tmp_dir / safe_name
             tmp_path.rename(saved_path)
             caption = message.caption.strip() if message.caption else ""
             task_hint = f"\nЗадача от пользователя: {caption}" if caption else ""
             agent_msg = (
-                f"Пользователь прислал документ: {file_name}\n"
+                f"Пользователь прислал документ: {safe_name}\n"
                 f"Файл сохранён: {saved_path}{task_hint}\n"
                 f"Прочитай его через parse_document и обработай: если нет конкретной задачи — "
                 f"кратко изложи содержимое и предложи сохранить как заметку."
@@ -512,6 +518,11 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
 
         client = anthropic.Anthropic(api_key=_config.get("anthropic", {}).get("api_key", ""))
         is_txt = file_name.lower().endswith(".txt")
+
+        _MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
+        if not is_txt and tmp_path.stat().st_size > _MAX_PDF_BYTES:
+            await status_msg.edit_text("❌ Файл слишком большой (лимит 10 МБ). Разбей выписку на части.")
+            return
 
         if is_txt:
             txt_content = tmp_path.read_text(errors="replace")[:30000]

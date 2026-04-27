@@ -88,8 +88,9 @@ def get_changes(service, page_token: str) -> tuple[list[dict], str]:
     """
     changes = []
     new_token = page_token
+    _MAX_PAGES = 200  # guard against infinite loop if API returns same token repeatedly
 
-    while True:
+    for _page_num in range(_MAX_PAGES):
         response = service.changes().list(
             pageToken=page_token,
             spaces="drive",
@@ -107,11 +108,13 @@ def get_changes(service, page_token: str) -> tuple[list[dict], str]:
                 # Google Workspace files (Docs, Sheets, etc.) — include without md5
                 changes.append(file_info)
 
-        if "nextPageToken" in response:
-            page_token = response["nextPageToken"]
-        else:
+        next_token = response.get("nextPageToken")
+        if not next_token or next_token == page_token:
             new_token = response.get("newStartPageToken", new_token)
             break
+        page_token = next_token
+    else:
+        logger.warning(f"get_changes: reached page limit ({_MAX_PAGES}), stopping pagination")
 
     logger.info(f"Fetched {len(changes)} changed files from Google Drive")
     return changes, new_token

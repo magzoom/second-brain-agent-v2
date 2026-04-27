@@ -14,12 +14,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _DEV_REQUEST_FILE = Path.home() / ".sba" / "dev_request.json"
-_DEV_WAIT_SECONDS = 1800  # 30 minutes
+_DEV_POLL_INTERVAL = 60   # seconds between checks
+_DEV_WAIT_MAX = 900       # max total wait: 15 minutes (was 30, reduced to avoid overlapping launchd runs)
 
 
 def wait_if_dev_active() -> bool:
-    """Check if dev_processor is running. If so, wait 30 min and re-check once.
-    Returns True if safe to proceed, False if still active after waiting (skip run)."""
+    """Check if dev_processor is running. If so, poll every 60 s up to 15 min.
+    Returns True if safe to proceed, False if still active after timeout (skip run)."""
 
     def _is_active() -> bool:
         if not _DEV_REQUEST_FILE.exists():
@@ -33,15 +34,17 @@ def wait_if_dev_active() -> bool:
     if not _is_active():
         return True
 
-    logger.info("Dev processor active — deferring run by 30 minutes")
-    time.sleep(_DEV_WAIT_SECONDS)
+    waited = 0
+    logger.info("Dev processor active — polling every 60s (max 15 min)")
+    while waited < _DEV_WAIT_MAX:
+        time.sleep(_DEV_POLL_INTERVAL)
+        waited += _DEV_POLL_INTERVAL
+        if not _is_active():
+            logger.info(f"Dev processor finished after {waited}s — proceeding with run")
+            return True
 
-    if _is_active():
-        logger.info("Dev processor still active after 30 min — skipping this run")
-        return False
-
-    logger.info("Dev processor finished — proceeding with run")
-    return True
+    logger.info(f"Dev processor still active after {waited}s — skipping this run")
+    return False
 
 
 def acquire_lock(lock_file: Path) -> object:

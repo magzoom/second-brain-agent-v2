@@ -1050,7 +1050,10 @@ async def _get_weather_tool(args: dict) -> dict:
             location = "Astana"
 
     def _fetch():
-        url = f"https://wttr.in/{location}?format=j1"
+        import urllib.parse as _up
+        # URL-encode the location to prevent injection via special chars (?, #, /)
+        loc_encoded = _up.quote(str(location), safe=",")
+        url = f"https://wttr.in/{loc_encoded}?format=j1"
         req = _ur.Request(url, headers={"User-Agent": "curl/7.88.1"})
         with _ur.urlopen(req, timeout=8) as resp:
             data = _json.loads(resp.read())
@@ -1092,11 +1095,26 @@ async def _parse_document_tool(args: dict) -> dict:
     import asyncio as _asyncio
     from pathlib import Path as _Path
 
-    file_path = args.get("file_path", "").replace("~", str(_Path.home()))
+    raw_path = args.get("file_path", "")
+    # Expand ~ only at the start (not mid-path) to prevent tricks like /a/~/b
+    if raw_path.startswith("~"):
+        raw_path = str(_Path.home()) + raw_path[1:]
+    file_path = raw_path
     max_chars = int(args.get("max_chars", 15000))
-    p = _Path(file_path)
+    p = _Path(file_path).resolve()
+
+    # Whitelist: only allow reading from ~/.sba/tmp/ to prevent secrets leakage
+    _allowed_prefixes = [
+        _Path.home() / ".sba" / "tmp",
+    ]
+    if not any(str(p).startswith(str(prefix)) for prefix in _allowed_prefixes):
+        return _ok(
+            f"Отказано: файл '{p}' находится за пределами разрешённой директории (~/.sba/tmp/). "
+            "Перемести файл туда или запроси содержимое другим способом."
+        )
+
     if not p.exists():
-        return _ok(f"Файл не найден: {file_path}")
+        return _ok(f"Файл не найден: {p}")
 
     suffix = p.suffix.lower()
 

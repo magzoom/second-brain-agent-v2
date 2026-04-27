@@ -5,6 +5,7 @@ Runs Claude Code CLI to implement the requested tool in sba/agent.py.
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -60,6 +61,21 @@ def main():
     tool_name = data.get("tool_name", "")
     task = data.get("task", "")
     resume_message = data.get("resume_message", "")
+
+    # Validate tool_name: only safe identifiers allowed
+    if not re.match(r'^[a-zA-Z0-9_]{1,80}$', tool_name):
+        logging.warning(f"Dev request rejected: invalid tool_name={tool_name!r}")
+        DEV_REQUEST_FILE.unlink(missing_ok=True)
+        return
+
+    # Scan task for prompt injection before passing to Claude Code
+    from sba.security import scan_content
+    threat = scan_content(task)
+    if threat:
+        logging.warning(f"Dev request rejected: task contains {threat}")
+        _notify(chat_id, f"⚠️ Запрос отклонён: обнаружена подозрительная инструкция ({threat})", config)
+        DEV_REQUEST_FILE.unlink(missing_ok=True)
+        return
 
     # Mark as processing
     data["status"] = "processing"
@@ -158,29 +174,8 @@ Do not modify any other files. Do not restart the bot."""
 
     if status == "ready":
         logging.info(f"Tool {tool_name} ready, saving resume and restarting bot")
-        # Auto-commit the new/updated tool (no sensitive data check needed — agent.py has no secrets)
-        git_env = {
-            **os.environ,
-            "HOME": str(Path.home()),
-            "PATH": f"{Path.home()}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
-            "GIT_AUTHOR_NAME": "SBA Dev Bot",
-            "GIT_COMMITTER_NAME": "SBA Dev Bot",
-            "GIT_AUTHOR_EMAIL": "sba@local",
-            "GIT_COMMITTER_EMAIL": "sba@local",
-        }
-        subprocess.run(
-            ["git", "add", "sba/agent.py"],
-            cwd=str(PROJECT_DIR), capture_output=True, env=git_env,
-        )
-        commit_result = subprocess.run(
-            ["git", "commit", "-m",
-             f"feat: add {tool_name} tool via CC auto-development\n\nCo-Authored-By: Claude Code <noreply@anthropic.com>"],
-            cwd=str(PROJECT_DIR), capture_output=True, text=True, env=git_env,
-        )
-        if commit_result.returncode == 0:
-            logging.info(f"Auto-committed {tool_name} tool")
-        else:
-            logging.warning(f"Git commit skipped: {commit_result.stderr[:200]}")
+        # NOTE: no auto-commit — changes must be reviewed and committed manually to avoid
+        # unreviewed code landing in main. Run: git add sba/agent.py && git commit
 
         # Save resume context — increment retry_count from existing file to prevent infinite loops
         if resume_message:

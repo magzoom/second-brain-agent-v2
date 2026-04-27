@@ -15,6 +15,7 @@ Plist files installed to ~/Library/LaunchAgents/.
 import subprocess
 import sys
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -44,6 +45,11 @@ def get_log_path(daemon: str) -> str:
     return str(LOG_DIR / f"sba-{daemon}.log")
 
 
+def _xs(value) -> str:
+    """XML-safe string for embedding in plist <string> elements."""
+    return _xml_escape(str(value))
+
+
 def _plist_path(daemon: str) -> Path:
     return LAUNCH_AGENTS / f"{DAEMONS[daemon]}.plist"
 
@@ -51,9 +57,10 @@ def _plist_path(daemon: str) -> Path:
 # ── Plist builders ────────────────────────────────────────────────────────────
 
 def _bot_plist() -> str:
-    log = get_log_path("bot")
-    python = str(SBA_PYTHON)
-    exe = str(SBA_EXE)
+    log = _xs(get_log_path("bot"))
+    python = _xs(SBA_PYTHON)
+    exe = _xs(SBA_EXE)
+    venv_bin = _xs(f"{SBA_VENV}/bin")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -80,16 +87,17 @@ def _bot_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{SBA_VENV}/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
 
 
 def _inbox_plist() -> str:
-    log = get_log_path("inbox")
-    python = str(SBA_PYTHON)
-    exe = str(SBA_EXE)
+    log = _xs(get_log_path("inbox"))
+    python = _xs(SBA_PYTHON)
+    exe = _xs(SBA_EXE)
+    venv_bin = _xs(f"{SBA_VENV}/bin")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -120,16 +128,17 @@ def _inbox_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{SBA_VENV}/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
 
 
 def _legacy_plist() -> str:
-    log = get_log_path("legacy")
-    python = str(SBA_PYTHON)
-    exe = str(SBA_EXE)
+    log = _xs(get_log_path("legacy"))
+    python = _xs(SBA_PYTHON)
+    exe = _xs(SBA_EXE)
+    venv_bin = _xs(f"{SBA_VENV}/bin")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -159,16 +168,17 @@ def _legacy_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{SBA_VENV}/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
 
 
 def _digest_plist() -> str:
-    log = get_log_path("digest")
-    python = str(SBA_PYTHON)
-    exe = str(SBA_EXE)
+    log = _xs(get_log_path("digest"))
+    python = _xs(SBA_PYTHON)
+    exe = _xs(SBA_EXE)
+    venv_bin = _xs(f"{SBA_VENV}/bin")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -198,16 +208,17 @@ def _digest_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{SBA_VENV}/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
 
 
 def _finance_plist() -> str:
-    log = get_log_path("finance")
-    python = str(SBA_PYTHON)
-    exe = str(SBA_EXE)
+    log = _xs(get_log_path("finance"))
+    python = _xs(SBA_PYTHON)
+    exe = _xs(SBA_EXE)
+    venv_bin = _xs(f"{SBA_VENV}/bin")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -237,16 +248,17 @@ def _finance_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{SBA_VENV}/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
 
 
 def _fin_remind_plist() -> str:
-    log = get_log_path("fin_remind")
-    python = str(SBA_PYTHON)
-    exe = str(SBA_EXE)
+    log = _xs(get_log_path("fin_remind"))
+    python = _xs(SBA_PYTHON)
+    exe = _xs(SBA_EXE)
+    venv_bin = _xs(f"{SBA_VENV}/bin")
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -274,17 +286,19 @@ def _fin_remind_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>{SBA_VENV}/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>{venv_bin}:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>"""
 
 
 def _dev_plist() -> str:
-    log = get_log_path("dev")
-    python = str(SBA_PYTHON)
-    request_file = str(Path.home() / ".sba" / "dev_request.json")
-    project_dir = str(Path.home() / "Desktop" / "second-brain-agent-v2")
+    log = _xs(get_log_path("dev"))
+    python = _xs(SBA_PYTHON)
+    request_file = _xs(Path.home() / ".sba" / "dev_request.json")
+    project_dir = _xs(Path.home() / "Desktop" / "second-brain-agent-v2")
+    venv_bin = _xs(f"{SBA_VENV}/bin")
+    home = _xs(Path.home())
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -313,9 +327,9 @@ def _dev_plist() -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>/Applications/cmux.app/Contents/Resources/bin:{SBA_VENV}/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>/Applications/cmux.app/Contents/Resources/bin:{venv_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>HOME</key>
-    <string>{Path.home()}</string>
+    <string>{home}</string>
   </dict>
 </dict>
 </plist>"""

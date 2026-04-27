@@ -40,6 +40,18 @@ def _create_tables(conn: sqlite3.Connection) -> None:
     conn.executescript("""
         -- v2.1 migrations (safe to re-run)
         -- task_id added to goal_tracker_posts for stable dedup by Google Task ID
+
+        -- Performance indexes (safe to re-run — CREATE INDEX IF NOT EXISTS)
+        CREATE INDEX IF NOT EXISTS idx_fin_tx_account_date
+            ON fin_transactions(account, tx_date);
+        CREATE INDEX IF NOT EXISTS idx_fin_tx_date
+            ON fin_transactions(tx_date);
+        CREATE INDEX IF NOT EXISTS idx_fin_tx_type
+            ON fin_transactions(tx_type);
+        CREATE INDEX IF NOT EXISTS idx_pending_del_status
+            ON pending_deletions(status);
+        CREATE INDEX IF NOT EXISTS idx_files_status_source
+            ON files_registry(status, source);
     """)
     # Column migration: task_id (may already exist on upgraded DBs)
     try:
@@ -496,10 +508,13 @@ class Database:
         if row is None:
             return None
 
-        await self._conn.execute(
-            "UPDATE pending_deletions SET status='confirmed', confirmed_at=CURRENT_TIMESTAMP WHERE id=?",
+        # Guard against double-confirm race: only update if still 'waiting'
+        async with self._conn.execute(
+            "UPDATE pending_deletions SET status='confirmed', confirmed_at=CURRENT_TIMESTAMP WHERE id=? AND status='waiting'",
             (deletion_id,),
-        )
+        ) as upd:
+            if upd.rowcount == 0:
+                return None  # another concurrent confirm already changed the status
         await self._conn.commit()
         return dict(row)
 
@@ -624,13 +639,25 @@ class Database:
         )
         await self._conn.commit()
 
+    @staticmethod
+    def _sanitize_fts_query(query: str) -> str:
+        """Escape FTS5 special characters so raw user input doesn't cause parse errors."""
+        # Wrap the whole query in double-quotes for phrase search if it contains special chars.
+        # FTS5 specials: " * ^ : ( ) NOT AND OR
+        fts_specials = set('"*^:()\\')
+        if any(c in fts_specials for c in query) or query.upper() in ("NOT", "AND", "OR"):
+            # Escape internal double-quotes and wrap
+            return '"' + query.replace('"', '""') + '"'
+        return query
+
     async def search_fts(self, query: str, limit: int = 5) -> list:
+        safe_query = self._sanitize_fts_query(query)
         try:
             async with self._conn.execute(
                 "SELECT source_id, source_type, title, category, "
                 "snippet(fts_index, 3, '**', '**', '...', 20) as snippet "
                 "FROM fts_index WHERE fts_index MATCH ? ORDER BY rank LIMIT ?",
-                (query, limit),
+                (safe_query, limit),
             ) as cur:
                 return [dict(row) for row in await cur.fetchall()]
         except Exception as e:
@@ -753,30 +780,39 @@ class Database:
         self, account: Optional[str], amount: float, tx_type: str,
         category: str = "", description: str = "", tx_date: str = "",
     ) -> int:
-        """Add transaction and update account balance. Returns transaction id."""
+        """Add transaction and update account balance atomically. Returns transaction id."""
         if not tx_date:
             from datetime import date
             tx_date = date.today().isoformat()
-        async with self._conn.execute(
-            "INSERT INTO fin_transactions (account, amount, tx_type, category, description, tx_date) VALUES (?,?,?,?,?,?)",
-            (account, amount, tx_type, category or "", description or "", tx_date),
-        ) as cur:
-            tx_id = cur.lastrowid
+        # Wrap INSERT + UPDATE in an explicit savepoint so a crash between them
+        # does not leave the balance inconsistent with the transaction log.
+        await self._conn.execute("SAVEPOINT fin_tx")
+        try:
+            async with self._conn.execute(
+                "INSERT INTO fin_transactions (account, amount, tx_type, category, description, tx_date) VALUES (?,?,?,?,?,?)",
+                (account, amount, tx_type, category or "", description or "", tx_date),
+            ) as cur:
+                tx_id = cur.lastrowid
 
-        # Update account balance atomically with the insert
-        if account:
-            if tx_type in ("income", "debt_taken", "transfer_in"):
-                await self._conn.execute(
-                    "UPDATE fin_accounts SET balance=balance+?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
-                    (amount, account),
-                )
-            elif tx_type in ("expense", "debt_paid", "transfer_out"):
-                await self._conn.execute(
-                    "UPDATE fin_accounts SET balance=balance-?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
-                    (amount, account),
-                )
-            # tx_type='transfer' (legacy/unknown direction): no balance change
-        await self._conn.commit()
+            if account:
+                if tx_type in ("income", "debt_taken", "transfer_in"):
+                    await self._conn.execute(
+                        "UPDATE fin_accounts SET balance=balance+?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                        (amount, account),
+                    )
+                elif tx_type in ("expense", "debt_paid", "transfer_out"):
+                    await self._conn.execute(
+                        "UPDATE fin_accounts SET balance=balance-?, updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                        (amount, account),
+                    )
+                # tx_type='transfer' (legacy/unknown direction): no balance change
+
+            await self._conn.execute("RELEASE SAVEPOINT fin_tx")
+            await self._conn.commit()
+        except Exception:
+            await self._conn.execute("ROLLBACK TO SAVEPOINT fin_tx")
+            await self._conn.execute("RELEASE SAVEPOINT fin_tx")
+            raise
         return tx_id
 
     async def fin_get_liabilities(self) -> list:
@@ -1110,6 +1146,16 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
             return float(row["total"]) if row else 0.0
+
+    async def cleanup_old_snapshots(self, keep_days: int = 730) -> int:
+        """Delete balance snapshots older than keep_days. Returns deleted count."""
+        async with self._conn.execute(
+            "DELETE FROM fin_balance_snapshots WHERE snapshot_date < date('now', ?)",
+            (f"-{keep_days} days",),
+        ) as cur:
+            deleted = cur.rowcount
+        await self._conn.commit()
+        return deleted
 
     async def fin_count_months_with_data(self) -> int:
         """Return number of distinct months that have transaction data."""

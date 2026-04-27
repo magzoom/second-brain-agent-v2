@@ -84,14 +84,19 @@ async def run(config: dict) -> None:
 
 
 def _backup_db(db_path: Path) -> None:
-    """Create a backup before processing. Keep last 7."""
-    import shutil
+    """Create a WAL-safe backup using sqlite3.backup(). Keep last 7."""
+    import sqlite3
     from datetime import datetime
     backup_dir = Path.home() / ".sba" / "backups"
     backup_dir.mkdir(exist_ok=True)
     dst = backup_dir / f"sba_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
     try:
-        shutil.copy2(db_path, dst)
+        src_conn = sqlite3.connect(str(db_path))
+        dst_conn = sqlite3.connect(str(dst))
+        with dst_conn:
+            src_conn.backup(dst_conn)
+        src_conn.close()
+        dst_conn.close()
         backups = sorted(backup_dir.glob("sba_*.db"))
         for old in backups[:-7]:
             old.unlink()
@@ -337,13 +342,25 @@ async def _process_gdrive_legacy(
             stats["errors"] += 1
 
 
+_MAX_SCAN_DEPTH = 20  # guard against symlink cycles or deeply nested Drive structures
+
+
 async def _scan_folder(
     service, db: Database, notifier: Notifier, config: dict,
     folder_id: str, path_stack: list[str],
     decisions_counter: dict, folders_per_run: int,
     stats: dict, _list,
+    _visited: set | None = None,
 ) -> None:
     """Scan one folder: send decisions for unclassified subfolders. Files are not processed."""
+    # Guard against Drive shortcut cycles and excessive recursion depth
+    if _visited is None:
+        _visited = set()
+    if folder_id in _visited or len(path_stack) > _MAX_SCAN_DEPTH:
+        logger.warning(f"_scan_folder: skipping '{' / '.join(path_stack)}' — cycle or depth limit")
+        return
+    _visited.add(folder_id)
+
     # Skip folders the user has acknowledged or fully processed
     own_status = await db.get_folder_status("gdrive", folder_id)
     if own_status in ("folder_done", "folder_summary"):
@@ -380,7 +397,7 @@ async def _scan_folder(
                 service=service, db=db, notifier=notifier, config=config,
                 folder_id=sub_id, path_stack=path_stack + [sub_title],
                 decisions_counter=decisions_counter, folders_per_run=folders_per_run,
-                stats=stats, _list=_list,
+                stats=stats, _list=_list, _visited=_visited,
             )
         # pending_decision / folder_summary / folder_done / folder_partial → skip
 
