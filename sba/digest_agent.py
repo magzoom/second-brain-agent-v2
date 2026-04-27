@@ -275,78 +275,75 @@ async def _fetch_posts(config: dict, hours_back: int) -> str:
 
     since = datetime.now() - timedelta(hours=hours_back)
 
-    # Open DB for deduplication
-    db = Database(get_db_path())
-    await db.connect()
-    await db.digest_cleanup_old(keep_days=7)
-
-    client = TelegramClient(
-        session_path, api_id, api_hash,
-        receive_updates=False,
-        sequential_updates=True,
-    )
     raw: list[dict] = []
-    try:
-        await asyncio.wait_for(client.connect(), timeout=10)
-        dialogs = await client.get_dialogs()
-        channels = [d for d in dialogs if d.is_channel and getattr(d.entity, "broadcast", False)][:30]
+    async with Database(get_db_path()) as db:
+        await db.digest_cleanup_old(keep_days=7)
 
-        for channel in channels:
-            username = getattr(channel.entity, "username", None)
-            channel_id = channel.entity.id
-            is_priority = username and username.lower() in priority_channels
-            per_channel_limit = priority_limit if is_priority else default_limit
+        client = TelegramClient(
+            session_path, api_id, api_hash,
+            receive_updates=False,
+            sequential_updates=True,
+        )
+        try:
+            await asyncio.wait_for(client.connect(), timeout=10)
+            dialogs = await client.get_dialogs()
+            channels = [d for d in dialogs if d.is_channel and getattr(d.entity, "broadcast", False)][:30]
 
-            seen_ids = await db.digest_get_seen_ids(channel_id)
-            candidates: list[dict] = []
+            for channel in channels:
+                username = getattr(channel.entity, "username", None)
+                channel_id = channel.entity.id
+                is_priority = username and username.lower() in priority_channels
+                per_channel_limit = priority_limit if is_priority else default_limit
 
-            try:
-                async for msg in client.iter_messages(
-                    channel, offset_date=since, reverse=True,
-                    limit=per_channel_limit * 8,
-                ):
-                    if not msg.text or len(msg.text) < 50:
-                        continue
-                    if msg.id in seen_ids:
-                        continue
-                    text_lower = msg.text.lower()
-                    if any(w in text_lower for w in noise_words):
-                        continue
-                    candidates.append({
-                        "channel": channel.name,
-                        "channel_id": channel_id,
-                        "msg_id": msg.id,
-                        "text": msg.text[:150],
-                        "url": f"https://t.me/{username}/{msg.id}" if username else None,
-                        "score": _score_post(msg),
-                        "urls_in_text": _extract_urls(msg.text),
-                    })
-            except Exception as e:
-                logger.debug(f"Skipping channel '{channel.name}': {e}")
+                seen_ids = await db.digest_get_seen_ids(channel_id)
+                candidates: list[dict] = []
 
-            # Sort by score, take top N for this channel
-            candidates.sort(key=lambda p: p["score"], reverse=True)
-            raw.extend(candidates[:per_channel_limit])
+                try:
+                    async for msg in client.iter_messages(
+                        channel, offset_date=since, reverse=True,
+                        limit=per_channel_limit * 8,
+                    ):
+                        if not msg.text or len(msg.text) < 50:
+                            continue
+                        if msg.id in seen_ids:
+                            continue
+                        text_lower = msg.text.lower()
+                        if any(w in text_lower for w in noise_words):
+                            continue
+                        candidates.append({
+                            "channel": channel.name,
+                            "channel_id": channel_id,
+                            "msg_id": msg.id,
+                            "text": msg.text[:150],
+                            "url": f"https://t.me/{username}/{msg.id}" if username else None,
+                            "score": _score_post(msg),
+                            "urls_in_text": _extract_urls(msg.text),
+                        })
+                except Exception as e:
+                    logger.debug(f"Skipping channel '{channel.name}': {e}")
 
-    finally:
-        await client.disconnect()
+                # Sort by score, take top N for this channel
+                candidates.sort(key=lambda p: p["score"], reverse=True)
+                raw.extend(candidates[:per_channel_limit])
 
-    # Deduplicate same story across channels (shared URL → keep highest score)
-    seen_story_urls: set = set()
-    deduped: list[dict] = []
-    for p in sorted(raw, key=lambda p: p["score"], reverse=True):
-        story_urls = p["urls_in_text"]
-        if story_urls and story_urls & seen_story_urls:
-            continue  # same story already included from another channel
-        seen_story_urls |= story_urls
-        deduped.append(p)
-        if len(deduped) >= max_posts:
-            break
+        finally:
+            await client.disconnect()
 
-    # Mark shown posts in DB
-    if deduped:
-        await db.digest_mark_seen_batch(deduped)
-    await db.close()
+        # Deduplicate same story across channels (shared URL → keep highest score)
+        seen_story_urls: set = set()
+        deduped: list[dict] = []
+        for p in sorted(raw, key=lambda p: p["score"], reverse=True):
+            story_urls = p["urls_in_text"]
+            if story_urls and story_urls & seen_story_urls:
+                continue  # same story already included from another channel
+            seen_story_urls |= story_urls
+            deduped.append(p)
+            if len(deduped) >= max_posts:
+                break
+
+        # Mark shown posts in DB
+        if deduped:
+            await db.digest_mark_seen_batch(deduped)
 
     logger.info(
         f"Pre-fetched {len(deduped)} posts (from {len(raw)} candidates, "
