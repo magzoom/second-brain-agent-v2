@@ -23,6 +23,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 
 from sba.db import Database, get_db_path
+from sba.api_client import get_anthropic_client
 
 logger = logging.getLogger(__name__)
 
@@ -240,13 +241,20 @@ async def handle_voice_input(message: Message, bot: Bot) -> None:
             "основной счёт, второй счёт, бизнес счёт, "
             "расход, доход, перевод, оплата, долг, кредит."
         )
-        result = await asyncio.to_thread(
-            mlx_whisper.transcribe,
-            str(ogg_path),
-            path_or_hf_repo="mlx-community/whisper-medium-mlx",
-            initial_prompt=initial_prompt,
-            language="ru",
-        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    mlx_whisper.transcribe,
+                    str(ogg_path),
+                    path_or_hf_repo="mlx-community/whisper-medium-mlx",
+                    initial_prompt=initial_prompt,
+                    language="ru",
+                ),
+                timeout=300,
+            )
+        except asyncio.TimeoutError:
+            await status_msg.edit_text("❌ Распознавание речи заняло слишком долго (>5 мин). Попробуй снова.")
+            return
 
         text = result.get("text", "").strip()
         if not text:
@@ -445,7 +453,6 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
     """Parse a bank statement PDF and offer to import transactions."""
     status_msg = await message.answer("🏦 Читаю банковскую выписку...")
     try:
-        import anthropic
         import base64
         import json
 
@@ -516,7 +523,7 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
             "дом, переводы людям, подарки, садака, разное"
         )
 
-        client = anthropic.Anthropic(api_key=_config.get("anthropic", {}).get("api_key", ""))
+        client = get_anthropic_client(_config)
         is_txt = file_name.lower().endswith(".txt")
 
         _MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -782,7 +789,6 @@ async def callback_folder_summary(callback: CallbackQuery) -> None:
 
 def _blocking_create_summary(config: dict, folder_id: str, title: str, path: str) -> tuple:
     """Sync: list folder, call Haiku, create _sba_summary.md in Drive. Returns (file_id, text, link)."""
-    import anthropic
     from sba.integrations.google_drive import build_service, list_folder_contents, create_summary_file
 
     service = build_service(config)
@@ -803,10 +809,7 @@ def _blocking_create_summary(config: dict, folder_id: str, title: str, path: str
         f"## Описание (2-3 предложения что тут хранится и зачем). Только markdown."
     )
 
-    client = anthropic.Anthropic(
-        api_key=config.get("anthropic", {}).get("api_key", ""),
-        timeout=30.0,
-    )
+    client = get_anthropic_client(config, timeout=30.0)
     model = config.get("classifier", {}).get("model", "claude-haiku-4-5-20251001")
     response = client.messages.create(
         model=model, max_tokens=500,

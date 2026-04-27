@@ -23,6 +23,7 @@ from sba.integrations import apple_notes, google_tasks
 from sba.integrations.google_drive import (
     build_service, trash_file, list_folder_contents,
 )
+from sba.api_client import get_anthropic_client
 
 logger = logging.getLogger(__name__)
 
@@ -185,15 +186,12 @@ async def _delete_item(item: dict, config: dict) -> bool:
 
 async def _goal_tracker(db: Database, notifier: Notifier, config: dict) -> None:
     """Post completed tasks from last 3 days to Goal Tracker Diary channel."""
-    import anthropic
-
     channel_id = config.get("goal_tracker", {}).get("channel_id")
     if not channel_id:
         logger.warning("Goal Tracker: channel_id not configured")
         return
 
     model = config.get("classifier", {}).get("model", "claude-haiku-4-5-20251001")
-    api_key = config.get("anthropic", {}).get("api_key", "")
 
     try:
         service = await asyncio.to_thread(google_tasks.build_service, config)
@@ -225,8 +223,9 @@ async def _goal_tracker(db: Database, notifier: Notifier, config: dict) -> None:
 
     transformed_entries = [(t, lst) for t, lst, _ in new_entries]  # fallback
     try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        client = get_anthropic_client(config)
+        response = await asyncio.to_thread(
+            client.messages.create,
             model=model,
             max_tokens=500,
             messages=[{"role": "user", "content": transform_prompt}],
@@ -419,8 +418,6 @@ async def _send_folder_decision(
     folder_item: dict, path_stack: list[str], sub_path: str, _list,
 ) -> None:
     """Register folder as pending_decision and send Telegram notification."""
-    import anthropic
-
     folder_id = folder_item.get("id", "")
     title = folder_item.get("name", "")
 
@@ -446,9 +443,8 @@ async def _send_folder_decision(
             lines.append(f"... и ещё {len(contents) - 30}")
         listing = "\n".join(lines)
 
-        api_key = config.get("anthropic", {}).get("api_key", "")
         model = config.get("classifier", {}).get("model", "claude-haiku-4-5-20251001")
-        client = anthropic.Anthropic(api_key=api_key)
+        client = get_anthropic_client(config)
         resp = await asyncio.to_thread(
             lambda: client.messages.create(
                 model=model, max_tokens=80,

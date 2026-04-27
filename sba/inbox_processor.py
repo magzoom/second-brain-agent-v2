@@ -16,7 +16,7 @@ import json
 import logging
 from pathlib import Path
 
-import anthropic
+from sba.api_client import get_anthropic_client
 
 from sba.db import Database, get_db_path
 from sba.lock import acquire_lock, release_lock, wait_if_dev_active
@@ -294,10 +294,7 @@ async def _classify_item_haiku(title: str, content: str, is_folder: bool, config
         f'{{\"category\": \"2_Business_Career\", \"classification\": \"info\"}}'
     )
     try:
-        client = anthropic.Anthropic(
-            api_key=config.get("anthropic", {}).get("api_key", ""),
-            timeout=20.0,
-        )
+        client = get_anthropic_client(config, timeout=20.0)
         response = await asyncio.to_thread(
             client.messages.create,
             model="claude-haiku-4-5-20251001",
