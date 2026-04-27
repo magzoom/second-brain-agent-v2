@@ -404,6 +404,14 @@
         <td>PDF размер</td>
         <td>Лимит 10 МБ на банковские выписки перед отправкой в API.</td>
       </tr>
+      <tr>
+        <td>Shared Anthropic client</td>
+        <td><code>sba/api_client.py</code>: singleton с connection-pool reuse. Одно HTTPS-соединение на API-ключ вместо нового на каждый запрос.</td>
+      </tr>
+      <tr>
+        <td>mlx_whisper timeout</td>
+        <td>Транскрипция аудио обёрнута в <code>asyncio.wait_for(timeout=300)</code> — бот не зависнет на длинном файле.</td>
+      </tr>
     </table>
   </div>
 

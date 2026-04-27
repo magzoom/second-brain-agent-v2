@@ -23,6 +23,9 @@
 - **L: config validation** — пустой config.yaml → `sys.exit(1)` вместо молчаливой работы
 - **Security scanner** — добавлено 11 русских паттернов + jailbreak phrases в `security.py`
 - **cleanup_old_snapshots** — новый метод DB для очистки снапшотов старше 2 лет
+- **Q: Shared Anthropic client** — `sba/api_client.py`: singleton `get_anthropic_client(config)`, connection-pool reuse вместо новых соединений на каждый запрос
+- **Q: mlx_whisper timeout** — `asyncio.wait_for(..., timeout=300)` вокруг транскрипции аудио
+- **Q: aiogram 3.7.0 → 3.13.1** — security fixes, совместимость
 
 ## Архитектура
 
