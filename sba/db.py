@@ -52,6 +52,8 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             ON pending_deletions(status);
         CREATE INDEX IF NOT EXISTS idx_files_status_source
             ON files_registry(status, source);
+        CREATE INDEX IF NOT EXISTS idx_fin_recurring_active
+            ON fin_recurring(is_active, day_of_month);
     """)
     # Column migration: task_id (may already exist on upgraded DBs)
     try:
