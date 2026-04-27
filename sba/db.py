@@ -154,6 +154,15 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             tokenize='unicode61'
         );
 
+        -- Digest: deduplication of shown posts across days
+        CREATE TABLE IF NOT EXISTS digest_seen_posts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id  INTEGER NOT NULL,
+            msg_id      INTEGER NOT NULL,
+            shown_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(channel_id, msg_id)
+        );
+
         -- v2: User behaviour patterns for adaptive system prompt
         CREATE TABLE IF NOT EXISTS user_patterns (
             key         TEXT PRIMARY KEY,
@@ -1127,6 +1136,32 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
             return float(row["total"]) if row else 0.0
+
+    # ── digest_seen_posts ─────────────────────────────────────────────────────
+
+    async def digest_get_seen_ids(self, channel_id: int) -> set:
+        """Return set of already-shown msg_ids for a channel."""
+        async with self._conn.execute(
+            "SELECT msg_id FROM digest_seen_posts WHERE channel_id=?", (channel_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+        return {row[0] for row in rows}
+
+    async def digest_mark_seen_batch(self, posts: list[dict]) -> None:
+        """Mark a list of {channel_id, msg_id} posts as seen."""
+        await self._conn.executemany(
+            "INSERT OR IGNORE INTO digest_seen_posts (channel_id, msg_id) VALUES (?, ?)",
+            [(p["channel_id"], p["msg_id"]) for p in posts],
+        )
+        await self._conn.commit()
+
+    async def digest_cleanup_old(self, keep_days: int = 7) -> None:
+        """Delete seen-post records older than keep_days to keep the table small."""
+        await self._conn.execute(
+            "DELETE FROM digest_seen_posts WHERE shown_at < datetime('now', ?)",
+            (f"-{keep_days} days",),
+        )
+        await self._conn.commit()
 
     async def cleanup_old_snapshots(self, keep_days: int = 730) -> int:
         """Delete balance snapshots older than keep_days. Returns deleted count."""

@@ -164,7 +164,7 @@ _digest_server = create_sdk_mcp_server(
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-DIGEST_SYSTEM_PROMPT = """Ты создаёшь утренний дайджест для пользователя. Отвечай на русском.
+DIGEST_SYSTEM_PROMPT = """Ты создаёшь утренний дайджест для пользователя. Отвечай на русском.{mood_line}
 
 Данные (задачи + посты) уже переданы в сообщении пользователя. Никаких инструментов вызывать не нужно.
 
@@ -230,56 +230,133 @@ def _fmt_date(iso: str) -> str:
         return iso
 
 
+def _score_post(msg) -> int:
+    """Engagement score: views + forwards*5 + reactions*2."""
+    views = getattr(msg, "views", 0) or 0
+    forwards = getattr(msg, "forwards", 0) or 0
+    reactions = 0
+    if getattr(msg, "reactions", None):
+        try:
+            reactions = sum(r.count for r in msg.reactions.results)
+        except Exception:
+            pass
+    return views + forwards * 5 + reactions * 2
+
+
+def _extract_urls(text: str) -> set:
+    """Extract bare URLs from post text for deduplication of same-story coverage."""
+    return set(re.findall(r"https?://[^\s\)\]>\"']+", text))
+
+
 async def _fetch_posts(config: dict, hours_back: int) -> str:
-    """Fetch Telegram broadcast channel posts. Returns formatted string."""
+    """Fetch, rank and deduplicate Telegram broadcast channel posts."""
     from telethon import TelegramClient
+    from sba.db import Database, get_db_path
+
     session_path = str(Path.home() / ".sba" / "telegram_userbot")
     api_id = config.get("telegram_userbot", {}).get("api_id", 0)
     api_hash = config.get("telegram_userbot", {}).get("api_hash", "")
     if not api_id or not api_hash:
         return "Telegram userbot не настроен."
 
+    digest_cfg = config.get("digest", {})
+    max_posts: int = int(digest_cfg.get("max_posts", 35))
+    default_limit: int = int(digest_cfg.get("default_channel_limit", 2))
+    priority_limit: int = int(digest_cfg.get("priority_channel_limit", 5))
+    priority_channels: set = {
+        u.lstrip("@").lower()
+        for u in digest_cfg.get("priority_channels", [])
+    }
+    noise_words: list = [w.lower() for w in digest_cfg.get("noise_words", [
+        "реклама", "подписывайся", "промокод", "заказать",
+        "жми", "подпишись", "скидка", "купить", "крипта",
+        "курс обучения", "перейти по ссылке",
+    ])]
+
     since = datetime.now() - timedelta(hours=hours_back)
-    MAX_POSTS, MAX_PER_CHANNEL = 35, 2
-    posts = []
-    # receive_updates=False — не обрабатывать входящие апдейты,
-    # иначе Telethon выдаёт security errors на старых message ID и зависает
+
+    # Open DB for deduplication
+    db = Database(get_db_path())
+    await db.connect()
+    await db.digest_cleanup_old(keep_days=7)
+
     client = TelegramClient(
         session_path, api_id, api_hash,
         receive_updates=False,
         sequential_updates=True,
     )
+    raw: list[dict] = []
     try:
         await asyncio.wait_for(client.connect(), timeout=10)
         dialogs = await client.get_dialogs()
-        # Take only the 30 most recently active broadcast channels to avoid flood limits
         channels = [d for d in dialogs if d.is_channel and getattr(d.entity, "broadcast", False)][:30]
+
         for channel in channels:
-            if len(posts) >= MAX_POSTS:
-                break
-            channel_count = 0
+            username = getattr(channel.entity, "username", None)
+            channel_id = channel.entity.id
+            is_priority = username and username.lower() in priority_channels
+            per_channel_limit = priority_limit if is_priority else default_limit
+
+            seen_ids = await db.digest_get_seen_ids(channel_id)
+            candidates: list[dict] = []
+
             try:
-                async for msg in client.iter_messages(channel, offset_date=since, reverse=True, limit=MAX_PER_CHANNEL * 3):
-                    if len(posts) >= MAX_POSTS or channel_count >= MAX_PER_CHANNEL:
-                        break
-                    if msg.text and len(msg.text) > 50:
-                        username = getattr(channel.entity, "username", None)
-                        posts.append({
-                            "channel": channel.name,
-                            "text": msg.text[:120],
-                            "url": f"https://t.me/{username}/{msg.id}" if username else None,
-                        })
-                        channel_count += 1
+                async for msg in client.iter_messages(
+                    channel, offset_date=since, reverse=True,
+                    limit=per_channel_limit * 8,
+                ):
+                    if not msg.text or len(msg.text) < 50:
+                        continue
+                    if msg.id in seen_ids:
+                        continue
+                    text_lower = msg.text.lower()
+                    if any(w in text_lower for w in noise_words):
+                        continue
+                    candidates.append({
+                        "channel": channel.name,
+                        "channel_id": channel_id,
+                        "msg_id": msg.id,
+                        "text": msg.text[:150],
+                        "url": f"https://t.me/{username}/{msg.id}" if username else None,
+                        "score": _score_post(msg),
+                        "urls_in_text": _extract_urls(msg.text),
+                    })
             except Exception as e:
                 logger.debug(f"Skipping channel '{channel.name}': {e}")
+
+            # Sort by score, take top N for this channel
+            candidates.sort(key=lambda p: p["score"], reverse=True)
+            raw.extend(candidates[:per_channel_limit])
+
     finally:
         await client.disconnect()
 
-    logger.info(f"Pre-fetched {len(posts)} Telegram posts from {len(set(p['channel'] for p in posts))} channels")
-    if not posts:
+    # Deduplicate same story across channels (shared URL → keep highest score)
+    seen_story_urls: set = set()
+    deduped: list[dict] = []
+    for p in sorted(raw, key=lambda p: p["score"], reverse=True):
+        story_urls = p["urls_in_text"]
+        if story_urls and story_urls & seen_story_urls:
+            continue  # same story already included from another channel
+        seen_story_urls |= story_urls
+        deduped.append(p)
+        if len(deduped) >= max_posts:
+            break
+
+    # Mark shown posts in DB
+    if deduped:
+        await db.digest_mark_seen_batch(deduped)
+    await db.close()
+
+    logger.info(
+        f"Pre-fetched {len(deduped)} posts (from {len(raw)} candidates, "
+        f"{len(set(p['channel'] for p in deduped))} channels)"
+    )
+    if not deduped:
         return "Постов из каналов за указанный период не найдено."
+
     lines = []
-    for p in posts:
+    for p in deduped:
         url_part = f" ({p['url']})" if p.get("url") else ""
         lines.append(f"[{p['channel']}]{url_part}: {p['text']}")
     return "\n\n---\n\n".join(lines)
@@ -400,6 +477,10 @@ async def run_digest(notifier, config: dict) -> None:
 
     weather_block = f"\nПОГОДА:\n{weather_text}\n" if weather_text else ""
 
+    mood = config.get("digest", {}).get("mood", "")
+    mood_line = f"\nСтиль подачи: {mood}" if mood else ""
+    system_prompt = DIGEST_SYSTEM_PROMPT.replace("{mood_line}", mood_line)
+
     prompt = f"""Составь утренний дайджест. Все данные уже получены — НЕ вызывай никакие инструменты.
 
 ЗАДАЧИ НА СЕГОДНЯ:
@@ -409,7 +490,7 @@ async def run_digest(notifier, config: dict) -> None:
 {posts_text}"""
 
     options = ClaudeAgentOptions(
-        system_prompt=DIGEST_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         model=model,
         disallowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep",
                           "mcp__digest__get_telegram_channel_posts",

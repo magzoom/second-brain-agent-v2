@@ -26,6 +26,11 @@
 - **Q: Shared Anthropic client** — `sba/api_client.py`: singleton `get_anthropic_client(config)`, connection-pool reuse вместо новых соединений на каждый запрос
 - **Q: mlx_whisper timeout** — `asyncio.wait_for(..., timeout=300)` вокруг транскрипции аудио
 - **Q: aiogram 3.7.0 → 3.13.1** — security fixes, совместимость
+- **Q: Digest ranking** — посты ранжируются по `views + forwards*5 + reactions*2`; топ-N по каналу
+- **Q: Digest dedup** — `digest_seen_posts` (SQLite): посты не повторяются между дайджестами; URL-дедупликация одной истории из разных каналов; очистка записей старше 7 дней
+- **Q: Digest flexible limits** — `priority_channels` (config) → `priority_channel_limit` постов; остальные → `default_channel_limit`; `max_posts` — общий потолок
+- **Q: Digest noise filter** — список `noise_words` (config) — фильтрует рекламные посты до передачи агенту
+- **Q: Digest mood** — `digest.mood` в config.yaml → стиль подачи инжектируется в system prompt
 
 ## Архитектура
 
@@ -305,7 +310,7 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - Telethon session версии: Telethon 1.42.0 ожидает схему v7 (5 колонок без `tmp_auth_key`); если сессия v8 (6 колонок) — ValueError "too many values to unpack". Фикс: пересоздать таблицу sessions без `tmp_auth_key`, установить version=7 через Python+sqlite3
 - Goal Tracker: JXA batch reads → Haiku трансформирует → постит в канал
 - FTS5: `tokenize='unicode61'` для русского текста
-- Digest: MAX_POSTS=35, MAX_PER_CHANNEL=2, msg.text[:120], max_turns=3, parse_mode=HTML (не markdown); fallback отправляет msg.result если send_digest не был вызван; окно Telegram-постов 16ч; показываются ВСЕ задачи на сегодня + просроченные, ⚠️ если due < today
+- Digest: `max_posts=35`, `default_channel_limit=2`, `priority_channel_limit=5` (config); посты ранжируются по `views+forwards*5+reactions*2`; дедупликация через `digest_seen_posts` + URL cross-channel; `noise_words` фильтр; `mood` стиль подачи; msg.text[:150]; max_turns=3; parse_mode=HTML; окно 16ч; ВСЕ задачи на сегодня + просроченные (⚠️)
 - Digest weather: секция 🌤 ПОГОДА между СЕГОДНЯ и ДАЙДЖЕСТ; источник wttr.in; координаты из `~/.sba/last_location.json` → fallback `digest.location` в config (сейчас "Astana")
 - fin_remind вечер (21:00): если есть `~/.sba/last_location.json` — добавляет прогноз на завтра в конец чек-ин сообщения
 - handlers.py location: `F.location` handler сохраняет координаты в `~/.sba/last_location.json` и отвечает прогнозом на завтра
