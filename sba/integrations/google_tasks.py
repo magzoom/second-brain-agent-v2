@@ -141,8 +141,10 @@ def create_task(
 def get_tasks_today(service, tz_name: str = "Asia/Almaty") -> list[dict]:
     """Return incomplete tasks due today or overdue (all lists)."""
     tz = ZoneInfo(tz_name)
-    end_dt = datetime.now(tz).replace(hour=23, minute=59, second=59).astimezone(timezone.utc)
-    end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    # Google Tasks stores due dates as midnight UTC (YYYY-MM-DDT00:00:00.000Z)
+    # and dueMax uses strict date comparison — must use tomorrow midnight to include today
+    tomorrow = (datetime.now(tz).date() + timedelta(days=1)).isoformat()
+    end_str = f"{tomorrow}T00:00:00.000Z"
 
     result = service.tasklists().list(maxResults=100).execute()
     items = []
