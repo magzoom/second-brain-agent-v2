@@ -1091,12 +1091,14 @@ class Database:
                 existing = (row[0] or "").lower().strip()
                 if existing and (desc_lower in existing or existing in desc_lower):
                     return True
-        # Same-amount match: if same account/date/amount already exists, treat as duplicate.
-        # Covers transfers too — two legs of a transfer are on DIFFERENT accounts so they
-        # won't falsely collide here; this catches re-imports where Haiku varies the description.
+        # Same-amount match: if same account/date/amount already exists (manual entry vs statement),
+        # treat as duplicate regardless of description to prevent double-counting.
+        # Excludes transfers — they use count-based dedup in callback_stmt_confirm
+        # (two legs are on different accounts; descriptions vary between Haiku parses).
         async with self._conn.execute(
             """SELECT 1 FROM fin_transactions
                WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01
+               AND tx_type NOT IN ('transfer','transfer_in','transfer_out')
                LIMIT 1""",
             (account, tx_date, amount),
         ) as cur:
@@ -1110,6 +1112,16 @@ class Database:
             """SELECT COUNT(*) FROM fin_transactions
                WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01 AND description=?""",
             (account, tx_date, amount, description),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
+    async def fin_transfer_count(self, account: str, tx_date: str, amount: float, tx_type: str) -> int:
+        """Count transfer transactions matching account/date/amount/tx_type (ignores description)."""
+        async with self._conn.execute(
+            """SELECT COUNT(*) FROM fin_transactions
+               WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01 AND tx_type=?""",
+            (account, tx_date, amount, tx_type),
         ) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0

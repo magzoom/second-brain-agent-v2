@@ -642,27 +642,44 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
         from sba.db import Database, get_db_path
         from collections import Counter
 
+        _TRANSFER_TYPES = ("transfer_in", "transfer_out", "transfer")
+
         def _tx_key(t):
             return (t.get("account", "account_main"), t.get("tx_date", ""), float(t["amount"]), t.get("description", ""))
 
+        def _transfer_key(t):
+            # Transfers: ignore description — Haiku varies it between parses
+            return (t.get("account", "account_main"), t.get("tx_date", ""), float(t["amount"]), t.get("tx_type", ""))
+
         batch_counts = Counter(_tx_key(t) for t in transactions)
+        batch_transfer_counts = Counter(_transfer_key(t) for t in transactions if t.get("tx_type") in _TRANSFER_TYPES)
         session_inserted: Counter = Counter()
+        transfer_session_inserted: Counter = Counter()
 
         async with Database(get_db_path(_config)) as db:
             inserted = 0
             skipped = 0
             for t in transactions:
-                key = _tx_key(t)
-                if batch_counts[key] > 1:
-                    # Multiple identical transactions in batch — count-based dedup
-                    db_count = await db.fin_transaction_count(*key)
-                    if db_count + session_inserted[key] >= batch_counts[key]:
+                is_transfer = t.get("tx_type") in _TRANSFER_TYPES
+                if is_transfer:
+                    tkey = _transfer_key(t)
+                    db_count = await db.fin_transfer_count(*tkey)
+                    if db_count + transfer_session_inserted[tkey] >= batch_transfer_counts[tkey]:
                         skipped += 1
                         continue
+                    transfer_session_inserted[tkey] += 1
                 else:
-                    if await db.fin_transaction_exists(*key):
-                        skipped += 1
-                        continue
+                    key = _tx_key(t)
+                    if batch_counts[key] > 1:
+                        db_count = await db.fin_transaction_count(*key)
+                        if db_count + session_inserted[key] >= batch_counts[key]:
+                            skipped += 1
+                            continue
+                    else:
+                        if await db.fin_transaction_exists(*key):
+                            skipped += 1
+                            continue
+                    session_inserted[key] += 1
                 await db.fin_add_transaction(
                     account=t.get("account", "account_main"),
                     amount=float(t["amount"]),
@@ -672,7 +689,6 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
                     tx_date=t.get("tx_date"),
                 )
                 inserted += 1
-                session_inserted[key] += 1
 
         skip_note = f" ({skipped} дублей пропущено)" if skipped else ""
 
