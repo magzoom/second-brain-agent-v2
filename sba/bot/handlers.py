@@ -676,19 +676,9 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
 
         skip_note = f" ({skipped} дублей пропущено)" if skipped else ""
 
-        # Apply ending_balance from statement to the primary account (most transactions).
-        # Handles statements that generate both sides of transfers (→ 2 affected accounts).
-        if ending_balance is not None:
-            from collections import Counter as _Counter
-            primary_account = _Counter(
-                t.get("account", "account_main") for t in transactions
-            ).most_common(1)[0][0]
-            async with Database(get_db_path(_config)) as db_fix:
-                await db_fix.fin_set_balance_direct(primary_account, float(ending_balance))
-
         affected_accounts = {t.get("account", "account_main") for t in transactions}
 
-        # Show current balances of affected accounts
+        # Show mathematical balances (from transactions) vs statement ending_balance
         async with Database(get_db_path(_config)) as db2:
             rows = await db2.fin_get_accounts()
         _ACCOUNT_LABELS = {
@@ -700,16 +690,34 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
             "account_biz": "Kaspi Business",
             "account_otbasy": "ОтбасыБанк",
         }
+
+        # Determine primary account (most transactions in batch)
+        from collections import Counter as _Counter
+        primary_account = _Counter(
+            t.get("account", "account_main") for t in transactions
+        ).most_common(1)[0][0]
+
         balance_lines = []
+        discrepancy_note = ""
         for r in rows:
             if r["name"] in affected_accounts:
                 label = _ACCOUNT_LABELS.get(r["name"], r["name"])
-                marker = ""
-                balance_lines.append(f"  {label}: {r['balance']:,.0f} ₸{marker}")
+                balance_lines.append(f"  {label}: {r['balance']:,.0f} ₸")
+                if r["name"] == primary_account and ending_balance is not None:
+                    diff = r["balance"] - float(ending_balance)
+                    if abs(diff) >= 0.5:
+                        sign = "+" if diff > 0 else ""
+                        discrepancy_note = (
+                            f"\n⚠️ Расхождение с выпиской: {sign}{diff:,.2f} ₸\n"
+                            f"   По выписке должно быть: {float(ending_balance):,.2f} ₸\n"
+                            f"   Возможно пропущена транзакция"
+                        )
+
         balance_block = "\n".join(balance_lines)
         await callback.message.edit_text(
             f"✅ Импортировано {inserted} операций{skip_note}.\n\n"
             f"Балансы счетов:\n{balance_block}"
+            f"{discrepancy_note}"
         )
     except Exception as e:
         logger.error(f"Statement import failed: {e}", exc_info=True)
