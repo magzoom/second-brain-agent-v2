@@ -510,7 +510,7 @@ async def _handle_bank_statement(message: Message, bot: Bot, tmp_path: Path, fil
             '{"ending_balance": 16467.28, "transactions": ['
             '{"tx_date":"2026-04-01","amount":5000.0,"tx_type":"expense",'
             '"category":"еда","description":"Название операции","account":"account_main"}]}\n\n'
-            "ending_balance: null (не используется — баланс считается из транзакций).\n\n"
+            "ending_balance: конечный баланс счёта выписки (число, если указан в PDF), иначе null.\n\n"
             "Правила:\n"
             "- tx_type: expense (расход), income (доход), transfer_out (перевод С этого счёта), transfer_in (перевод НА этот счёт)\n"
             "- Переводы между своими счетами (перечислены выше): генерируй ДВЕ РАЗНЫЕ записи:\n"

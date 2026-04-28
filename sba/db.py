@@ -1091,13 +1091,12 @@ class Database:
                 existing = (row[0] or "").lower().strip()
                 if existing and (desc_lower in existing or existing in desc_lower):
                     return True
-        # Same-amount match: if same account/date/amount already exists (manual entry vs statement),
-        # treat as duplicate regardless of description to prevent double-counting.
-        # Excludes transfers (they can legitimately have two legs with the same amount).
+        # Same-amount match: if same account/date/amount already exists, treat as duplicate.
+        # Covers transfers too — two legs of a transfer are on DIFFERENT accounts so they
+        # won't falsely collide here; this catches re-imports where Haiku varies the description.
         async with self._conn.execute(
             """SELECT 1 FROM fin_transactions
                WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01
-               AND tx_type NOT IN ('transfer','transfer_in','transfer_out')
                LIMIT 1""",
             (account, tx_date, amount),
         ) as cur:
