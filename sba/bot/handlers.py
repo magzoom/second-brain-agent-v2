@@ -657,22 +657,31 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
         transfer_session_inserted: Counter = Counter()
 
         async with Database(get_db_path(_config)) as db:
+            # Pre-fetch DB counts BEFORE the insertion loop — mid-loop queries
+            # would see already-inserted records and incorrectly block duplicates.
+            transfer_db_counts: Counter = Counter()
+            for tkey in batch_transfer_counts:
+                transfer_db_counts[tkey] = await db.fin_transfer_count(*tkey)
+
+            expense_db_counts: Counter = Counter()
+            for key, cnt in batch_counts.items():
+                if cnt > 1:
+                    expense_db_counts[key] = await db.fin_transaction_count(*key)
+
             inserted = 0
             skipped = 0
             for t in transactions:
                 is_transfer = t.get("tx_type") in _TRANSFER_TYPES
                 if is_transfer:
                     tkey = _transfer_key(t)
-                    db_count = await db.fin_transfer_count(*tkey)
-                    if db_count + transfer_session_inserted[tkey] >= batch_transfer_counts[tkey]:
+                    if transfer_db_counts[tkey] + transfer_session_inserted[tkey] >= batch_transfer_counts[tkey]:
                         skipped += 1
                         continue
                     transfer_session_inserted[tkey] += 1
                 else:
                     key = _tx_key(t)
                     if batch_counts[key] > 1:
-                        db_count = await db.fin_transaction_count(*key)
-                        if db_count + session_inserted[key] >= batch_counts[key]:
+                        if expense_db_counts[key] + session_inserted[key] >= batch_counts[key]:
                             skipped += 1
                             continue
                     else:
