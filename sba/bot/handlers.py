@@ -302,17 +302,32 @@ def _peek_pdf_text(path: Path, max_chars: int = 2000) -> str:
         return ""
 
 
+_BALANCE_CERT_KEYWORDS = ["справка", "справку", "certificate", "об остатке", "остатке на счёт"]
+
+_TRANSACTION_INDICATORS = ["пополнение", "списание", "покупка", "перевод", "приход", "расход"]
+
 def _is_bank_statement(file_name: str, mime_type: str, file_path: Path | None = None) -> bool:
     """Return True if the file looks like a bank statement (PDF or TXT)."""
     if mime_type not in ("application/pdf", "text/plain"):
         return False
     fn = file_name.lower()
+
+    pdf_text = ""
+    if mime_type == "application/pdf" and file_path:
+        pdf_text = _peek_pdf_text(file_path)
+
+    # Balance certificates without transactions — skip
+    # But if the certificate also contains transaction rows, treat it as a statement
+    is_cert = any(k in fn for k in _BALANCE_CERT_KEYWORDS) or any(k in pdf_text for k in _BALANCE_CERT_KEYWORDS)
+    if is_cert:
+        tx_hits = sum(1 for k in _TRANSACTION_INDICATORS if k in pdf_text)
+        if tx_hits < 2:
+            return False  # pure balance cert, no transaction data
+
     if any(k in fn for k in _STATEMENT_KEYWORDS):
         return True
-    # Filename gave no clue — peek into PDF content
-    if mime_type == "application/pdf" and file_path:
-        text = _peek_pdf_text(file_path)
-        matches = sum(1 for k in _STATEMENT_CONTENT_KEYWORDS if k in text)
+    if pdf_text:
+        matches = sum(1 for k in _STATEMENT_CONTENT_KEYWORDS if k in pdf_text)
         return matches >= 3
     return False
 
@@ -650,8 +665,14 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
 
         skip_note = f" ({skipped} дублей пропущено)" if skipped else ""
 
-        # Show current balances of affected accounts
+        # Apply ending_balance from statement to correct any drift from manual balance updates
         affected_accounts = {t.get("account", "account_main") for t in transactions}
+        if ending_balance is not None and len(affected_accounts) == 1:
+            stmt_account = next(iter(affected_accounts))
+            async with Database(get_db_path(_config)) as db_fix:
+                await db_fix.fin_set_balance_direct(stmt_account, float(ending_balance))
+
+        # Show current balances of affected accounts
         async with Database(get_db_path(_config)) as db2:
             rows = await db2.fin_get_accounts()
         _ACCOUNT_LABELS = {
