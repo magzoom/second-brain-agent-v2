@@ -640,19 +640,29 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
     try:
         await callback.message.edit_text("⏳ Импортирую...")
         from sba.db import Database, get_db_path
+        from collections import Counter
+
+        def _tx_key(t):
+            return (t.get("account", "account_main"), t.get("tx_date", ""), float(t["amount"]), t.get("description", ""))
+
+        batch_counts = Counter(_tx_key(t) for t in transactions)
+        session_inserted: Counter = Counter()
+
         async with Database(get_db_path(_config)) as db:
             inserted = 0
             skipped = 0
             for t in transactions:
-                is_dup = await db.fin_transaction_exists(
-                    account=t.get("account", "account_main"),
-                    tx_date=t.get("tx_date", ""),
-                    amount=float(t["amount"]),
-                    description=t.get("description", ""),
-                )
-                if is_dup:
-                    skipped += 1
-                    continue
+                key = _tx_key(t)
+                if batch_counts[key] > 1:
+                    # Multiple identical transactions in batch — count-based dedup
+                    db_count = await db.fin_transaction_count(*key)
+                    if db_count + session_inserted[key] >= batch_counts[key]:
+                        skipped += 1
+                        continue
+                else:
+                    if await db.fin_transaction_exists(*key):
+                        skipped += 1
+                        continue
                 await db.fin_add_transaction(
                     account=t.get("account", "account_main"),
                     amount=float(t["amount"]),
@@ -662,6 +672,7 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
                     tx_date=t.get("tx_date"),
                 )
                 inserted += 1
+                session_inserted[key] += 1
 
         skip_note = f" ({skipped} дублей пропущено)" if skipped else ""
 

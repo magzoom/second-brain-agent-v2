@@ -1105,6 +1105,16 @@ class Database:
                 return True
         return False
 
+    async def fin_transaction_count(self, account: str, tx_date: str, amount: float, description: str) -> int:
+        """Count existing transactions matching account/date/amount/description exactly."""
+        async with self._conn.execute(
+            """SELECT COUNT(*) FROM fin_transactions
+               WHERE account=? AND tx_date=? AND ABS(amount - ?) < 0.01 AND description=?""",
+            (account, tx_date, amount, description),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
+
     async def fin_get_today_transactions(self, today_str: str) -> list:
         """Return all transactions for a specific date."""
         async with self._conn.execute(
