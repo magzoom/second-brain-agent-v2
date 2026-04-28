@@ -676,12 +676,17 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
 
         skip_note = f" ({skipped} дублей пропущено)" if skipped else ""
 
-        # Apply ending_balance from statement to correct any drift from manual balance updates
-        affected_accounts = {t.get("account", "account_main") for t in transactions}
-        if ending_balance is not None and len(affected_accounts) == 1:
-            stmt_account = next(iter(affected_accounts))
+        # Apply ending_balance from statement to the primary account (most transactions).
+        # Handles statements that generate both sides of transfers (→ 2 affected accounts).
+        if ending_balance is not None:
+            from collections import Counter as _Counter
+            primary_account = _Counter(
+                t.get("account", "account_main") for t in transactions
+            ).most_common(1)[0][0]
             async with Database(get_db_path(_config)) as db_fix:
-                await db_fix.fin_set_balance_direct(stmt_account, float(ending_balance))
+                await db_fix.fin_set_balance_direct(primary_account, float(ending_balance))
+
+        affected_accounts = {t.get("account", "account_main") for t in transactions}
 
         # Show current balances of affected accounts
         async with Database(get_db_path(_config)) as db2:
