@@ -245,8 +245,10 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 ## DB — finance методы (db.py)
 
 - `fin_add_transaction(account, amount, tx_type, category, description, tx_date)` — добавить транзакцию
-- `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — 3 уровня дедупликации: (1) точное совпадение по 4 полям, (2) нечёткое: одно описание содержит другое при совпадении суммы/даты/счёта, (3) same-amount: совпадение account+date+amount при любом описании (исключает переводы); предотвращает дубль «ручная запись + выписка»
-- `fin_set_balance_direct(account_name, new_balance)` — прямое обновление баланса БЕЗ транзакции корректировки (+ снапшот); используется при импорте выписок вместо `fin_update_balance`
+- `fin_transaction_exists(account, tx_date, amount, description)` → `bool` — 2 уровня: (1) точное совпадение по 4 полям, (2) нечёткое: одно описание содержит другое при совпадении суммы/даты/счёта; Rule 3 (same-amount) удалена — она блокировала разные доходы на одинаковую сумму; используется только вне батч-импорта
+- `fin_transfer_count(account, tx_date, amount, tx_type)` → `int` — считает транзакции по 4 полям без description; используется в батч-импорте для всех типов транзакций
+- `fin_transaction_count(account, tx_date, amount, description)` → `int` — точный счётчик с description (резерв)
+- `fin_set_balance_direct(account_name, new_balance)` — прямое обновление баланса БЕЗ транзакции корректировки (+ снапшот); НЕ вызывается автоматически при импорте
 - `fin_get_today_transactions(today_str)` → `list` — все транзакции за дату
 - `fin_get_upcoming_recurring(today_day, days_in_month, current_month=None)` → `list` — платежи после сегодня до конца месяца; если передан current_month — скипает оплаченные (paid_month)
 - `fin_find_matching_transactions(label, amount, month_str, strict=True)` → `list` — ищет expense-транзакции за месяц по совпадению; strict=True: AND(сумма±2%, ключевые слова); strict=False: только ключевые слова (для прошедших платежей с курсовой разницей). Переводы (tx_type IN transfer/transfer_in/transfer_out) исключаются. Игнорирует короткие/общие слова: банк, bank, депозит, deposit, платёж, payment, оплата, kaspi, каспи, кредит, credit
@@ -273,8 +275,11 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - Парсинг через Claude Haiku API (~$0.02/файл, только при ручной отправке)
 - Показывает превью с кнопками `✅ Импортировать / ❌ Отмена`
 - После импорта: показывает актуальные балансы затронутых счетов (не подсказку)
-- Дубли: 3 уровня — (1) точное совпадение (account, tx_date, amount, description), (2) нечёткое (одно описание содержит другое при совпадении суммы/даты/счёта), (3) same-amount (совпадение account+date+amount при любом описании, кроме переводов)
-- Баланс: после импорта НЕ обновляется автоматически — только транзакции; `fin_set_balance_direct` используется только по явному запросу
+- Дубли: единый ключ `(account, tx_date, amount, tx_type)` без description — позволяет двум разным людям заплатить одинаковую сумму в один день; count-based: DB counts пре-фетчатся до цикла, session_inserted отслеживает вставки в рамках батча
+- `fin_transaction_exists` используется только вне импорта (ручные записи агента); в импорте — только count-based через `fin_transfer_count`
+- Баланс: после импорта НЕ обновляется автоматически — только транзакции; вместо этого показывает предупреждение если математический баланс расходится с `ending_balance` из PDF (≥ 0.5 ₸)
+- `ending_balance`: Haiku извлекает из PDF, хранится в `_pending_statements`; применяется как эталон для сверки, не как override
+- Telethon: оба venv (production `~/.sba/venv` и dev `.venv`) должны быть на одной версии ≥1.43.1 (CURRENT_VERSION=8); если сессия деградирует — запускать `sba auth userbot` только из `~/.sba/venv/bin/sba auth userbot`
 - Halyk commissions: если в строке «Сумма операции» = 0, но есть ненулевое «Комиссия» — это комиссия банка: tx_type=expense, amount=значение комиссии. Строки с amount=0 не создаются.
 - Определение счёта: по имени файла → по содержимому PDF (`_detect_account_from_content`)
 - Карты/IBAN привязаны к счетам в промпте Haiku → генерирует ОБЕ стороны переводов на РАЗНЫЕ счета
