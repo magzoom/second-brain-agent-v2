@@ -78,7 +78,7 @@ You (Telegram)  ──▶  Main Agent (Claude)
 | Notes | Apple Notes via JXA (JavaScript for Automation) |
 | Calendar | Google Calendar API (OAuth2) |
 | Messaging | Telegram Bot API (aiogram 3.13.x) |
-| Telegram reader | Telethon (userbot for channel reading) |
+| Telegram reader | Telethon >=1.43.1 (userbot for channel reading) |
 | Database | SQLite with FTS5 full-text search |
 | Scheduler | macOS launchd (7 background daemons) |
 | Language | Python 3.12 |
@@ -103,12 +103,12 @@ No commands needed — just plain text:
 | `find my notes about the project` | Full-text search across Google Drive + Apple Notes |
 | `research the topic of AI in healthcare` | Launches Research Agent: web search + personal base |
 | `save this link` | Creates a note in Apple Notes |
-| *(forward a PDF/TXT bank statement)* | Parses transactions with Claude Haiku, shows preview with confirm/cancel. Transfers between own accounts detected via "С Карт X" / "На Карт X" patterns |
+| *(forward a PDF/TXT bank statement)* | Parses transactions with Claude Haiku, shows preview with confirm/cancel. Dedup key: `(account, date, amount, tx_type)` — allows two different people to pay the same amount on the same day. DB counts pre-fetched before the insert loop (count-based, no description). Transfers detected via "С Карт X" / "На Карт X" patterns |
 | *(forward PDF/DOCX/TXT document)* | Agent reads content via `parse_document` (pymupdf) and responds. Add caption as instruction: "translate", "summarize" |
 | *(share location)* | Saves GPS coords to `~/.sba/last_location.json`, replies with tomorrow's forecast. Used in morning digest and evening check-in |
 | `YouTube link` | Fetches transcript and formats it. Specify format: "make chapters", "write thread", "write article", "quotes" |
 | `what's the weather?` | Forecast from saved GPS location or default city (Astana) |
-| `I paid the gym` | Marks recurring payment as paid for current month (suppresses reminders until next month) |
+| `I paid the gym` | Marks recurring payment as paid for current month (suppresses reminders until next month). Upcoming payments are also checked against existing transactions — if already paid ahead of schedule, they disappear from the list |
 | *(forward any other file or photo)* | Uploads to Google Drive Inbox for processing |
 | `how much is on my accounts?` | Shows balance across all accounts |
 | `spent 5000 on gas` | Logs a transaction in the finance module |
