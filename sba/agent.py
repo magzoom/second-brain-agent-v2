@@ -662,11 +662,18 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
                 if matches:
                     continue  # transaction found — treat as paid, skip
                 overdue.append(f"  • {label} — просрочен ({dom}-е)")
-            elif dom == today_day:
-                upcoming.append(f"  • {label} — сегодня ({dom}-е)")
             else:
-                days_left = dom - today_day
-                upcoming.append(f"  • {label} — через {days_left} дн. ({dom}-е)")
+                # Upcoming — still check if already paid via transaction this month
+                matches = await _db.fin_find_matching_transactions(
+                    item["label"], item.get("amount"), current_month, strict=False
+                )
+                if matches:
+                    continue  # already paid ahead of schedule
+                if dom == today_day:
+                    upcoming.append(f"  • {label} — сегодня ({dom}-е)")
+                else:
+                    days_left = dom - today_day
+                    upcoming.append(f"  • {label} — через {days_left} дн. ({dom}-е)")
 
         lines = []
         if overdue:
