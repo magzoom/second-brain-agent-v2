@@ -642,53 +642,32 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
         from sba.db import Database, get_db_path
         from collections import Counter
 
-        _TRANSFER_TYPES = ("transfer_in", "transfer_out", "transfer")
-
-        def _tx_key(t):
-            return (t.get("account", "account_main"), t.get("tx_date", ""), float(t["amount"]), t.get("description", ""))
-
-        def _transfer_key(t):
-            # Transfers: ignore description — Haiku varies it between parses
+        # Unified dedup key: (account, date, amount, tx_type) — ignores description.
+        # Reason: two different people can pay the same amount on the same day (different
+        # description, same amount) and Rule 3 in fin_transaction_exists wrongly blocked
+        # the second one. Using tx_type in key instead of description is safe because
+        # two legs of a transfer are always on different accounts.
+        def _dedup_key(t):
             return (t.get("account", "account_main"), t.get("tx_date", ""), float(t["amount"]), t.get("tx_type", ""))
 
-        batch_counts = Counter(_tx_key(t) for t in transactions)
-        batch_transfer_counts = Counter(_transfer_key(t) for t in transactions if t.get("tx_type") in _TRANSFER_TYPES)
+        batch_dedup_counts = Counter(_dedup_key(t) for t in transactions)
         session_inserted: Counter = Counter()
-        transfer_session_inserted: Counter = Counter()
 
         async with Database(get_db_path(_config)) as db:
             # Pre-fetch DB counts BEFORE the insertion loop — mid-loop queries
             # would see already-inserted records and incorrectly block duplicates.
-            transfer_db_counts: Counter = Counter()
-            for tkey in batch_transfer_counts:
-                transfer_db_counts[tkey] = await db.fin_transfer_count(*tkey)
-
-            expense_db_counts: Counter = Counter()
-            for key, cnt in batch_counts.items():
-                if cnt > 1:
-                    expense_db_counts[key] = await db.fin_transaction_count(*key)
+            db_counts: Counter = Counter()
+            for key in batch_dedup_counts:
+                db_counts[key] = await db.fin_transfer_count(key[0], key[1], key[2], key[3])
 
             inserted = 0
             skipped = 0
             for t in transactions:
-                is_transfer = t.get("tx_type") in _TRANSFER_TYPES
-                if is_transfer:
-                    tkey = _transfer_key(t)
-                    if transfer_db_counts[tkey] + transfer_session_inserted[tkey] >= batch_transfer_counts[tkey]:
-                        skipped += 1
-                        continue
-                    transfer_session_inserted[tkey] += 1
-                else:
-                    key = _tx_key(t)
-                    if batch_counts[key] > 1:
-                        if expense_db_counts[key] + session_inserted[key] >= batch_counts[key]:
-                            skipped += 1
-                            continue
-                    else:
-                        if await db.fin_transaction_exists(*key):
-                            skipped += 1
-                            continue
-                    session_inserted[key] += 1
+                key = _dedup_key(t)
+                if db_counts[key] + session_inserted[key] >= batch_dedup_counts[key]:
+                    skipped += 1
+                    continue
+                session_inserted[key] += 1
                 await db.fin_add_transaction(
                     account=t.get("account", "account_main"),
                     amount=float(t["amount"]),
