@@ -1082,12 +1082,14 @@ class Database:
         return dict(row) if row else None
 
     async def fin_find_recurring_by_label(self, label: str) -> list:
-        """Find active recurring payments by case-insensitive partial label match."""
+        """Find active recurring payments by case-insensitive partial label match.
+        Uses Python filtering because SQLite lower() doesn't handle Cyrillic."""
         async with self._conn.execute(
-            "SELECT * FROM fin_recurring WHERE is_active=1 AND lower(label) LIKE lower(?)",
-            (f"%{label}%",),
+            "SELECT * FROM fin_recurring WHERE is_active=1",
         ) as cur:
-            return [dict(r) for r in await cur.fetchall()]
+            rows = [dict(r) for r in await cur.fetchall()]
+        label_lower = label.lower()
+        return [r for r in rows if label_lower in r["label"].lower()]
 
     async def fin_update_recurring(self, item_id: int, **fields) -> None:
         """Update specific fields of a recurring payment by id.
