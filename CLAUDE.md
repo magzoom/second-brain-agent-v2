@@ -1,4 +1,18 @@
-# SBA 2.1 — Second Brain Agent
+# SBA 2.2 — Second Brain Agent
+
+## Changelog v2.2 (2026-05-14)
+
+Валютная поддержка, авто-отметка оплаченных, улучшенные напоминания:
+
+- **USD recurring payments** — колонка `currency TEXT DEFAULT 'KZT'` в `fin_recurring` (миграция в `_create_tables`). `action=add` с `currency=USD` — сумма хранится в долларах, отображается с конвертацией `$X ≈ Y ₸` по курсу Yahoo Finance (KZT=X)
+- **finance_manage_recurring action=update** — новое действие: обновить `amount`, `currency`, `day_of_month`, `remind_days_before` по `item_id` или `label` (частичный поиск). Промпт-триггеры: «обнови платёж X», «X теперь $Y», «X стоит $Y», «X теперь Y тенге»
+- **fin_find_recurring_by_label** — новый DB-метод: case-insensitive LIKE поиск активных платежей по части названия
+- **fin_update_recurring** — новый DB-метод: атомарный UPDATE конкретных полей записи
+- **format_recurring_amount / get_usd_kzt_rate** — вынесены из `fetch_gold_price_kzt` в `finance.py` как независимые хелперы; импортируются во всех модулях (agent, fin_remind, finance_list_recurring)
+- **Авто-отметка оплаченных при записи расхода** — `finance_add_transaction(expense)` после сохранения проверяет recurring payments и автоматически ставит `paid_month` при совпадении (`strict=False`)
+- **Авто-отметка оплаченных при импорте выписки** — `handlers.py`: после успешного импорта банковской выписки (`inserted > 0`) автоматически проверяет и отмечает совпадающие recurring payments
+- **Окно напоминаний days_ahead=2** — `fin_get_due_recurring` возвращает платежи за ближайшие 2 дня (было: только сегодня + сложная логика `remind_days_before` с wraparound). Логика упрощена: set of `due_days` с переходом месяца
+- **Ежедневные платежи — проверка за сегодня** — `fin_find_today_matching(label, amount, today_str)`: если подходящая expense-транзакция уже внесена сегодня — ежедневный платёж (садака и др.) не показывается в напоминании
 
 ## Changelog v2.1 (2026-04-27)
 
@@ -171,8 +185,8 @@ cd ~/Desktop/second-brain-agent-v2
 - `finance_get_zakat` — статус закята (расчёт через Yahoo Finance GC=F + KZT=X)
 - `finance_get_summary` — сводка за период
 - `finance_get_transactions` — последние транзакции по счёту или всем счетам
-- `finance_manage_recurring` — управление регулярными платежами; action=mark_paid отмечает платёж оплаченным в текущем месяце (не трогает балансы — только флаг)
-- `finance_list_recurring` — список регулярных платежей
+- `finance_manage_recurring` — управление регулярными платежами; action=add/update/delete/mark_paid. `update` — изменить amount/currency/day_of_month/remind_days_before по item_id или label. При action=add currency=USD — сумма хранится в долларах, отображается с конвертацией
+- `finance_list_recurring` — список регулярных платежей; USD-суммы показываются с курсом ≈ KZT
 - `get_youtube_transcript` — транскрипт YouTube-видео + трансформация: summary (по умолч.), chapters, thread, blog, quotes. Параметры: `video_url`, `format`, `language`
 - `parse_document` — извлечь текст из PDF/DOCX/TXT/MD/CSV через pymupdf (fitz) с pdfminer fallback. Параметры: `file_path`, `max_chars` (default 15000)
 - `get_weather` — прогноз погоды через wttr.in (без API-ключа). Читает `~/.sba/last_location.json` если есть, иначе `digest.location` из config. Параметры: `location` (опц.), `day` (today/tomorrow). Название города: если строка ("Astana") — используется напрямую; если GPS-координаты — берётся `nearest_area` из API (wttr.in возвращает районы типа "Zaozernuy" для строки)
@@ -191,11 +205,13 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 ### Логика проверки оплаты (fin_remind_processor.py + agent.py)
 
 **Утреннее напоминание (08:00):**
-- Ежедневные (day_of_month=0) — всегда в обычный список, без проверки транзакций
+- `fin_get_due_recurring(today_day, days_in_month, current_month, days_ahead=2)` — возвращает платежи за ближайшие 2 дня (inclusive today), плюс ежедневные (day_of_month=0)
+- Ежедневные (day_of_month=0) — проверяются через `fin_find_today_matching`: если соответствующий expense уже есть сегодня — не показывается
 - Разовые — `fin_find_matching_transactions(strict=True)` для каждого
   - Совпадение найдено → отдельное сообщение с кнопками ❓ "Да, оплачено" / "Нет, не оплачено"
   - Нет совпадений → обычное напоминание
 - `paid_month` уже выставлен → платёж скипается полностью
+- USD-платежи отображаются через `format_recurring_amount(item, usd_rate)` с конвертацией
 
 **Callbacks (bot/handlers.py):**
 - `recur_paid:{id}` → `fin_mark_recurring_paid(id, YYYY-MM)` — молчит до следующего месяца
@@ -253,6 +269,9 @@ ACCOUNT_ALIASES: "основной", "main" → account_main; "второй", "s
 - `fin_get_upcoming_recurring(today_day, days_in_month, current_month=None)` → `list` — платежи после сегодня до конца месяца; если передан current_month — скипает оплаченные (paid_month)
 - `fin_find_matching_transactions(label, amount, month_str, strict=True)` → `list` — ищет expense-транзакции за месяц по совпадению; strict=True: AND(сумма±2%, ключевые слова); strict=False: только ключевые слова (для прошедших платежей с курсовой разницей). Переводы (tx_type IN transfer/transfer_in/transfer_out) исключаются. Игнорирует короткие/общие слова: банк, bank, депозит, deposit, платёж, payment, оплата, kaspi, каспи, кредит, credit
 - `fin_get_recurring_by_id(id)` → `dict|None` — одна запись по id
+- `fin_find_recurring_by_label(label)` → `list` — case-insensitive LIKE поиск активных платежей по части названия
+- `fin_update_recurring(id, **fields)` — атомарный UPDATE; allowed fields: amount, currency, day_of_month, remind_days_before, label; currency нормализуется в uppercase
+- `fin_find_today_matching(label, amount, today_str)` → `bool` — проверка есть ли expense-транзакция за сегодня для ежедневного платежа (keywords + amount±2% fallback)
 - `fin_mark_recurring_paid(id, month_str)` — выставить paid_month; сбрасывается автоматически в новом месяце
 - `fin_get_avg_variable_spend(excluded_categories: set)` → `float` — среднемесячные переменные расходы (last 2 months)
 - `fin_get_month_variable_spend(month_str, excluded_categories: set)` → `float` — переменные расходы за месяц

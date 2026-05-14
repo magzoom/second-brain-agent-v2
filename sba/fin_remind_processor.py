@@ -66,7 +66,7 @@ async def _run(config: dict) -> None:
         days_in_month = calendar.monthrange(today.year, today.month)[1]
         month_str = today.strftime("%Y-%m")
 
-        due = await db.fin_get_due_recurring(today_day, days_in_month, current_month=month_str)
+        due = await db.fin_get_due_recurring(today_day, days_in_month, current_month=month_str, days_ahead=2)
         await db.fin_save_all_snapshots(source="auto")
         logger.info("Saved daily balance snapshots for all accounts")
 
@@ -74,10 +74,21 @@ async def _run(config: dict) -> None:
             unpaid = []
             maybe_paid = []
 
+            # Fetch USD rate once if any due item uses USD
+            from sba.finance import get_usd_kzt_rate, format_recurring_amount
+            usd_rate = None
+            if any((i.get("currency") or "KZT") == "USD" for i in due):
+                usd_rate = await get_usd_kzt_rate()
+
+            today_str = today.strftime("%Y-%m-%d")
             for item in due:
                 if item["day_of_month"] == 0:
-                    # Daily payments (e.g. садака) — never check transactions, always show
-                    unpaid.append((item, None))
+                    # Daily payments: check if already paid today
+                    paid_today = await db.fin_find_today_matching(
+                        item["label"], item.get("amount"), today_str
+                    )
+                    if not paid_today:
+                        unpaid.append((item, None))
                     continue
                 matches = await db.fin_find_matching_transactions(
                     item["label"], item.get("amount"), month_str
@@ -91,7 +102,7 @@ async def _run(config: dict) -> None:
             if unpaid:
                 lines = [f"💳 <b>Регулярные платежи — {today.strftime('%d.%m.%Y')}</b>\n"]
                 for item, _ in unpaid:
-                    amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+                    amount_str = format_recurring_amount(item, usd_rate)
                     if item["day_of_month"] == 0:
                         day_str = "ежедневно"
                     elif item["day_of_month"] == today_day:
@@ -104,7 +115,7 @@ async def _run(config: dict) -> None:
 
             # Send individual check messages for maybe-paid items
             for item, matches in maybe_paid:
-                await _send_paid_check(notifier, item, matches, today_day)
+                await _send_paid_check(notifier, item, matches, today_day, usd_rate)
 
             logger.info(
                 f"Recurring reminders: {len(unpaid)} unpaid, {len(maybe_paid)} maybe-paid"
@@ -114,9 +125,10 @@ async def _run(config: dict) -> None:
 
 
 
-async def _send_paid_check(notifier, item: dict, matches: list, today_day: int) -> None:
+async def _send_paid_check(notifier, item: dict, matches: list, today_day: int, usd_rate=None) -> None:
     """Send a message asking if a recurring payment was already made."""
-    amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+    from sba.finance import format_recurring_amount
+    amount_str = format_recurring_amount(item, usd_rate)
     dom = item["day_of_month"]
     if dom == today_day:
         day_str = f"срок сегодня ({today_day}-е)"
@@ -212,7 +224,23 @@ async def _generate_weekly_forecast(db, today: date) -> str | None:
     month_str = today.strftime("%Y-%m")
 
     upcoming_fixed = await db.fin_get_upcoming_recurring(today.day, days_in_month, current_month=month_str)
-    fixed_total = sum(r["amount"] or 0 for r in upcoming_fixed)
+
+    # Fetch USD rate if any upcoming fixed payment is in USD
+    from sba.finance import get_usd_kzt_rate, format_recurring_amount
+    usd_rate = None
+    if any((r.get("currency") or "KZT") == "USD" for r in upcoming_fixed):
+        usd_rate = await get_usd_kzt_rate()
+
+    def _to_kzt(r: dict) -> float:
+        """Convert recurring payment amount to KZT."""
+        amt = r.get("amount") or 0
+        if not amt:
+            return 0.0
+        if (r.get("currency") or "KZT") == "USD" and usd_rate:
+            return amt * usd_rate
+        return amt
+
+    fixed_total = sum(_to_kzt(r) for r in upcoming_fixed)
 
     variable_avg = await db.fin_get_avg_variable_spend(_FORECAST_EXCLUDED)
     spent_this_month = await db.fin_get_month_variable_spend(month_str, _FORECAST_EXCLUDED)
@@ -228,8 +256,8 @@ async def _generate_weekly_forecast(db, today: date) -> str | None:
     if upcoming_fixed:
         lines.append("📌 <b>Фиксированные платежи:</b>")
         for r in upcoming_fixed[:8]:
-            amt = f"{r['amount']:,.0f} ₸" if r.get("amount") else "—"
-            lines.append(f"  • {r['label']} ({r['day_of_month']}-е) — {amt}")
+            amt = format_recurring_amount(r, usd_rate) or " — —"
+            lines.append(f"  • {r['label']} ({r['day_of_month']}-е){amt}")
         if len(upcoming_fixed) > 8:
             lines.append(f"  • ... и ещё {len(upcoming_fixed) - 8}")
         lines.append(f"  <b>Итого:</b> {fixed_total:,.0f} ₸")

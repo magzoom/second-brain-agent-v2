@@ -83,6 +83,12 @@ def _create_tables(conn: sqlite3.Connection) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass  # already exists
+    # Column migration: currency for USD-denominated recurring payments
+    try:
+        conn.execute("ALTER TABLE fin_recurring ADD COLUMN currency TEXT NOT NULL DEFAULT 'KZT'")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # already exists
     try:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_tracker_task_id "
@@ -925,12 +931,12 @@ class Database:
 
     async def fin_upsert_recurring(
         self, label: str, day_of_month: int, amount: float = None,
-        remind_days_before: int = 0,
+        remind_days_before: int = 0, currency: str = "KZT",
     ) -> int:
         async with self._conn.execute(
-            """INSERT INTO fin_recurring (label, day_of_month, amount, remind_days_before)
-               VALUES (?,?,?,?)""",
-            (label, day_of_month, amount, remind_days_before),
+            """INSERT INTO fin_recurring (label, day_of_month, amount, remind_days_before, currency)
+               VALUES (?,?,?,?,?)""",
+            (label, day_of_month, amount, remind_days_before, currency.upper()),
         ) as cur:
             row_id = cur.lastrowid
         await self._conn.commit()
@@ -944,37 +950,34 @@ class Database:
         return True
 
     async def fin_get_due_recurring(
-        self, today_day: int, days_in_month: int = 31, current_month: str = None
+        self, today_day: int, days_in_month: int = 31, current_month: str = None,
+        days_ahead: int = 2,
     ) -> list:
-        """Return reminders due today: day_of_month==today OR day_of_month==0 (daily)
-        OR advance reminder fires remind_days_before days before day_of_month,
-        with wraparound across month boundaries.
+        """Return reminders due within the next days_ahead days (inclusive today).
+        Also includes daily payments (day_of_month==0).
         Skips items already confirmed paid this month (paid_month == current_month)."""
         async with self._conn.execute(
             "SELECT * FROM fin_recurring WHERE is_active=1 ORDER BY day_of_month, label"
         ) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
 
+        # Build the set of days that fall in the reminder window
+        due_days = set()
+        for i in range(days_ahead + 1):
+            d = today_day + i
+            if d <= days_in_month:
+                due_days.add(d)
+            else:
+                # Spills into next month — wrap to beginning
+                due_days.add(d - days_in_month)
+
         result = []
         for r in rows:
-            # Skip if already confirmed paid this month
             if current_month and r.get("paid_month") == current_month:
                 continue
             dom = r["day_of_month"]
-            rdb = r.get("remind_days_before") or 0
-            if dom == 0:
-                # daily
+            if dom == 0 or dom in due_days:
                 result.append(r)
-            elif dom == today_day:
-                # exact due day
-                result.append(r)
-            elif rdb > 0:
-                # advance reminder with wraparound: trigger_day = dom - rdb, wrapping into prev month
-                trigger = dom - rdb
-                if trigger <= 0:
-                    trigger += days_in_month
-                if trigger == today_day:
-                    result.append(r)
         return result
 
     async def fin_find_matching_transactions(
@@ -1045,6 +1048,31 @@ class Database:
 
         return matches
 
+    async def fin_find_today_matching(self, label: str, amount: float | None, today_str: str) -> bool:
+        """Check if a matching expense transaction exists for today (for daily recurring payments)."""
+        _GENERIC_WORDS = {
+            "банк", "bank", "депозит", "deposit", "платёж", "payment", "оплата",
+            "kaspi", "каспи", "кредит", "credit",
+        }
+        keywords = [
+            w.lower() for w in label.split()
+            if len(w) > 3 and w.lower() not in _GENERIC_WORDS
+        ]
+        async with self._conn.execute(
+            "SELECT * FROM fin_transactions WHERE tx_date=? AND tx_type='expense'",
+            (today_str,),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+
+        for tx in rows:
+            desc = (tx.get("description") or "").lower()
+            tx_amount = abs(tx.get("amount") or 0)
+            if keywords and any(kw in desc for kw in keywords):
+                return True
+            if amount and abs(tx_amount - amount) <= max(10, amount * 0.02):
+                return True
+        return False
+
     async def fin_get_recurring_by_id(self, recurring_id: int) -> dict | None:
         """Return a single recurring payment row by id."""
         async with self._conn.execute(
@@ -1052,6 +1080,30 @@ class Database:
         ) as cur:
             row = await cur.fetchone()
         return dict(row) if row else None
+
+    async def fin_find_recurring_by_label(self, label: str) -> list:
+        """Find active recurring payments by case-insensitive partial label match."""
+        async with self._conn.execute(
+            "SELECT * FROM fin_recurring WHERE is_active=1 AND lower(label) LIKE lower(?)",
+            (f"%{label}%",),
+        ) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    async def fin_update_recurring(self, item_id: int, **fields) -> None:
+        """Update specific fields of a recurring payment by id.
+        Accepted fields: amount, currency, day_of_month, remind_days_before, label."""
+        allowed = {"amount", "currency", "day_of_month", "remind_days_before", "label"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return
+        if "currency" in updates:
+            updates["currency"] = updates["currency"].upper()
+        set_clause = ", ".join(f"{k}=?" for k in updates)
+        values = list(updates.values()) + [item_id]
+        await self._conn.execute(
+            f"UPDATE fin_recurring SET {set_clause} WHERE id=?", values
+        )
+        await self._conn.commit()
 
     async def fin_mark_recurring_paid(self, recurring_id: int, month_str: str) -> None:
         """Mark a recurring payment as confirmed paid for the given month."""

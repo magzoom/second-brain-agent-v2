@@ -415,7 +415,26 @@ async def _finance_add_transaction_tool(args: dict) -> dict:
     await _db.fin_add_transaction(account, amount, tx_type, category, description, tx_date)
     sign = "⇄" if tx_type == "transfer" else ("+" if tx_type in ("income", "debt_taken") else "-")
     acc_label = account or "без счёта"
-    return _ok(f"Записано: {sign}{amount:,.0f} ₸ [{category or tx_type}] {acc_label}")
+    result_text = f"Записано: {sign}{amount:,.0f} ₸ [{category or tx_type}] {acc_label}"
+
+    # Auto-mark recurring payment as paid if this expense matches one
+    if tx_type == "expense":
+        from datetime import date as _date
+        _month_str = _date.today().strftime("%Y-%m")
+        recurring = await _db.fin_get_recurring()
+        for item in recurring:
+            if item.get("paid_month") == _month_str:
+                continue
+            if item["day_of_month"] == 0:
+                continue
+            matches = await _db.fin_find_matching_transactions(
+                item["label"], item.get("amount"), _month_str, strict=False
+            )
+            if matches:
+                await _db.fin_mark_recurring_paid(item["id"], _month_str)
+                result_text += f"\n✅ Отмечен оплаченным: {item['label']}"
+
+    return _ok(result_text)
 
 
 @tool("finance_update_account", "Обновить баланс счёта (пользователь сообщил актуальный баланс).", {
@@ -579,15 +598,16 @@ async def _finance_get_transactions_tool(args: dict) -> dict:
     return _ok("\n".join(lines))
 
 
-@tool("finance_manage_recurring", "Добавить, удалить или пометить оплаченным регулярный платёж.", {
+@tool("finance_manage_recurring", "Добавить, удалить, обновить или пометить оплаченным регулярный платёж.", {
     "type": "object",
     "properties": {
-        "action":       {"type": "string",  "description": "add, delete или mark_paid"},
-        "label":        {"type": "string",  "description": "Описание: 'Коммуналка', 'Google AI Pro', 'Садака', 'Школа'"},
+        "action":       {"type": "string",  "description": "add, update, delete или mark_paid"},
+        "label":        {"type": "string",  "description": "Описание: 'Коммуналка', 'Google AI Pro', 'Садака', 'Школа'. Для action=update используется как поисковый запрос если item_id не указан."},
         "day_of_month": {"type": "integer", "description": "День месяца 1-31. 0 = ежедневно"},
-        "amount":       {"type": "number",  "description": "Сумма в тенге (опционально)"},
+        "amount":       {"type": "number",  "description": "Сумма в указанной валюте. Для USD хранится в долларах, отображается с конвертацией по курсу."},
+        "currency":     {"type": "string",  "description": "Валюта: KZT (по умолчанию) или USD. USD-платежи автоматически конвертируются в тенге по вчерашнему курсу при отображении."},
         "remind_days_before": {"type": "integer", "description": "За сколько дней до срока напоминать (default 0)", "default": 0},
-        "item_id":      {"type": "integer", "description": "ID записи (для action=delete или mark_paid)"},
+        "item_id":      {"type": "integer", "description": "ID записи (для action=delete, update или mark_paid)"},
     },
     "required": ["action"],
 })
@@ -595,7 +615,41 @@ async def _finance_manage_recurring_tool(args: dict) -> dict:
     if not _db:
         return _ok("DB not initialized")
     action = args.get("action", "add")
-    if action == "delete":
+    if action == "update":
+        item_id = args.get("item_id")
+        label_query = args.get("label", "")
+        if not item_id:
+            if not label_query:
+                return _ok("Укажи item_id или label для поиска платежа.")
+            matches = await _db.fin_find_recurring_by_label(label_query)
+            if not matches:
+                return _ok(f"Платёж с названием '{label_query}' не найден.")
+            if len(matches) > 1:
+                lines = [f"Найдено несколько платежей, уточни (укажи item_id):"]
+                for m in matches:
+                    lines.append(f"  #{m['id']} {m['label']} — {m.get('amount')} {m.get('currency','KZT')}")
+                return _ok("\n".join(lines))
+            item_id = matches[0]["id"]
+        update_fields = {}
+        if args.get("amount") is not None:
+            update_fields["amount"] = float(args["amount"])
+        if args.get("currency"):
+            update_fields["currency"] = args["currency"]
+        if args.get("day_of_month") is not None:
+            update_fields["day_of_month"] = int(args["day_of_month"])
+        if args.get("remind_days_before") is not None:
+            update_fields["remind_days_before"] = int(args["remind_days_before"])
+        if not update_fields:
+            return _ok("Укажи что изменить: amount, currency, day_of_month или remind_days_before.")
+        await _db.fin_update_recurring(item_id, **update_fields)
+        row = await _db.fin_get_recurring_by_id(item_id)
+        from sba.finance import get_usd_kzt_rate, format_recurring_amount
+        usd_rate = None
+        if (row.get("currency") or "KZT") == "USD":
+            usd_rate = await get_usd_kzt_rate()
+        amt_str = format_recurring_amount(row, usd_rate)
+        return _ok(f"Платёж #{item_id} '{row['label']}' обновлён: {amt_str or 'сумма не указана'}")
+    elif action == "delete":
         item_id = args.get("item_id")
         if not item_id:
             return _ok("Укажи ID записи для удаления")
@@ -613,12 +667,21 @@ async def _finance_manage_recurring_tool(args: dict) -> dict:
         label = args.get("label", "")
         day = int(args.get("day_of_month", 0))
         amount = args.get("amount")
+        currency = (args.get("currency") or "KZT").upper()
         remind_before = int(args.get("remind_days_before", 0))
         if not label:
             return _ok("Укажи описание напоминания")
-        row_id = await _db.fin_upsert_recurring(label, day, float(amount) if amount else None, remind_before)
+        row_id = await _db.fin_upsert_recurring(
+            label, day, float(amount) if amount else None, remind_before, currency
+        )
         day_str = "ежедневно" if day == 0 else f"{day}-го числа каждого месяца"
-        amount_str = f" ({amount:,.0f} ₸)" if amount else ""
+        if amount:
+            if currency == "USD":
+                amount_str = f" (${amount:,.2f})"
+            else:
+                amount_str = f" ({amount:,.0f} ₸)"
+        else:
+            amount_str = ""
         return _ok(f"Напоминание #{row_id} добавлено: {label}{amount_str} — {day_str}")
 
 
@@ -634,6 +697,7 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
         return _ok("DB not initialized")
     import calendar
     from datetime import date
+    from sba.finance import get_usd_kzt_rate, format_recurring_amount
     today = date.today()
     today_day = today.day
     current_month = today.strftime("%Y-%m")
@@ -643,13 +707,18 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
     if not items:
         return _ok("Регулярных напоминаний нет.")
 
+    # Fetch USD rate once if any item uses USD
+    usd_rate = None
+    if any((i.get("currency") or "KZT") == "USD" for i in items):
+        usd_rate = await get_usd_kzt_rate()
+
     if mode == "upcoming":
         daily, overdue, upcoming = [], [], []
         for item in items:
             if item.get("paid_month") == current_month:
                 continue  # confirmed paid — skip
             dom = item["day_of_month"]
-            amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+            amount_str = format_recurring_amount(item, usd_rate)
             label = f"{item['label']}{amount_str}"
             if dom == 0:
                 daily.append(f"  • {label} — ежедневно")
@@ -694,7 +763,7 @@ async def _finance_list_recurring_tool(args: dict) -> dict:
         for item in items:
             dom = item["day_of_month"]
             day_str = "ежедневно" if dom == 0 else f"{dom}-го числа"
-            amount_str = f" — {item['amount']:,.0f} ₸" if item.get("amount") else ""
+            amount_str = format_recurring_amount(item, usd_rate)
             paid_mark = " ✅" if item.get("paid_month") == current_month else ""
             lines.append(f"  #{item['id']} {item['label']}{amount_str} — {day_str}{paid_mark}")
         return _ok("\n".join(lines))
@@ -1348,6 +1417,7 @@ Claude Code исправит инструмент автоматически и 
 - "напоминай N-го числа Y", "каждый месяц N-го" → finance_manage_recurring (action=add, day_of_month=N)
 - "мои регулярные платежи", "список напоминаний" → finance_list_recurring
 - "удали напоминание #N" → finance_manage_recurring (action=delete, item_id=N)
+- "обнови платёж X", "измени сумму X на Y", "X теперь в долларах", "X стоит $Y", "X теперь $Y", "X теперь Y$", "X теперь Y ₸", "X теперь Y тенге", "X теперь платёж N-го числа" → ВСЕГДА finance_manage_recurring (action=update, label=X, ...). НИКОГДА не создавать новый платёж (action=add) если платёж с таким названием уже существует — сначала вызови finance_list_recurring(mode='all') чтобы проверить. Поиск по label (частичное совпадение), item_id указывать не обязательно.
 
 Стиль ответов — строго:
 - Максимум 2-3 коротких предложения. Не больше.

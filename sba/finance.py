@@ -87,6 +87,34 @@ async def _yahoo_price(session, ticker: str) -> float:
         return float(data["chart"]["result"][0]["meta"]["regularMarketPrice"])
 
 
+async def get_usd_kzt_rate() -> Optional[float]:
+    """Fetch current USD/KZT exchange rate from Yahoo Finance. Returns None on failure."""
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            rate = await _yahoo_price(session, "KZT%3DX")
+        logger.info(f"USD/KZT rate: {rate:.2f}")
+        return rate
+    except Exception as e:
+        logger.warning(f"get_usd_kzt_rate failed: {e}")
+        return None
+
+
+def format_recurring_amount(item: dict, usd_rate: Optional[float]) -> str:
+    """Return formatted amount string for a recurring payment row.
+    USD items are shown with KZT conversion using the provided rate."""
+    amount = item.get("amount")
+    if not amount:
+        return ""
+    currency = item.get("currency") or "KZT"
+    if currency == "USD":
+        if usd_rate:
+            kzt = amount * usd_rate
+            return f" — ${amount:,.2f} ≈ {kzt:,.0f} ₸"
+        return f" — ${amount:,.2f} (курс недоступен)"
+    return f" — {amount:,.0f} ₸"
+
+
 async def fetch_gold_price_kzt() -> Optional[float]:
     """Fetch current gold price in KZT per gram via Yahoo Finance. Returns None on failure."""
     try:

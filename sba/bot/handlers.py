@@ -680,6 +680,27 @@ async def callback_stmt_confirm(callback: CallbackQuery) -> None:
 
         skip_note = f" ({skipped} дублей пропущено)" if skipped else ""
 
+        # Auto-mark recurring payments as paid if matching transactions were imported
+        if inserted > 0:
+            from datetime import date as _date
+            _month_str = _date.today().strftime("%Y-%m")
+            async with Database(get_db_path(_config)) as db_r:
+                recurring = await db_r.fin_get_recurring()
+                auto_marked = []
+                for item in recurring:
+                    if item.get("paid_month") == _month_str:
+                        continue  # already marked
+                    if item["day_of_month"] == 0:
+                        continue  # daily — skip (checked separately in reminders)
+                    matches = await db_r.fin_find_matching_transactions(
+                        item["label"], item.get("amount"), _month_str, strict=False
+                    )
+                    if matches:
+                        await db_r.fin_mark_recurring_paid(item["id"], _month_str)
+                        auto_marked.append(item["label"])
+            if auto_marked:
+                skip_note += f"\n✅ Автоматически отмечены оплаченными: {', '.join(auto_marked)}"
+
         affected_accounts = {t.get("account", "account_main") for t in transactions}
 
         # Show mathematical balances (from transactions) vs statement ending_balance
